@@ -1,0 +1,33 @@
+# V.E.R.A. - Python Dependencies
+# Install with: pip install -r requirements.txt
+
+# Core (no external dependencies for base functionality)
+# The core modules use only Python standard library
+
+# Optional: Web Framework (for REST API)
+# fastapi>=0.109.0
+# uvicorn[standard]>=0.27.0
+# pydantic>=2.5.0
+
+# Optional: Database (production E! Corpus)
+# psycopg2-binary>=2.9.9    # PostgreSQL
+# sqlalchemy>=2.0.25
+
+# Optional: Wikidata Integration
+# requests>=2.31.0
+# SPARQLWrapper>=2.0.0
+
+# Optional: LLM Integration
+# anthropic>=0.18.0         # Claude API
+
+# Development
+pytest>=7.4.0
+pytest-cov>=4.1.0
+black>=24.1.0
+isort>=5.13.0
+mypy>=1.8.0
+ruff>=0.1.14
+
+# Documentation
+# mkdocs>=1.5.0
+# mkdocs-material>=9.5.0

@@ -1,0 +1,111 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vera-ntp"
+version = "0.1.0"
+description = "V.E.R.A. - Verified Existence and Reason Architecture: AI Hallucination Prevention using Non-Traditional Predication Theory"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Andreas Hamberger", email = "andreas@vera-project.org"},
+]
+maintainers = [
+    {name = "V.E.R.A. Open Source Initiative"},
+]
+keywords = [
+    "ai",
+    "hallucination",
+    "verification",
+    "logic",
+    "ntp",
+    "predication",
+    "existence",
+    "reasoning",
+    "llm",
+    "trustworthy-ai",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "black>=24.1.0",
+    "isort>=5.13.0",
+    "mypy>=1.8.0",
+    "ruff>=0.1.14",
+]
+api = [
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "pydantic>=2.5.0",
+]
+database = [
+    "psycopg2-binary>=2.9.9",
+    "sqlalchemy>=2.0.25",
+]
+wikidata = [
+    "requests>=2.31.0",
+    "SPARQLWrapper>=2.0.0",
+]
+llm = [
+    "anthropic>=0.18.0",
+]
+all = [
+    "vera-ntp[dev,api,database,wikidata,llm]",
+]
+
+[project.urls]
+Homepage = "https://github.com/vera-project/vera"
+Documentation = "https://vera-project.github.io/vera"
+Repository = "https://github.com/vera-project/vera.git"
+Issues = "https://github.com/vera-project/vera/issues"
+Changelog = "https://github.com/vera-project/vera/blob/main/CHANGELOG.md"
+
+[project.scripts]
+vera = "vera.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --cov=vera --cov-report=term-missing"
+
+[tool.black]
+line-length = 100
+target-version = ['py310', 'py311', 'py312']
+include = '\.pyi?$'
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.ruff]
+line-length = 100
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
