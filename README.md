@@ -6,7 +6,7 @@ linux@linux.co.nz
 
 Following on from a popular article series of mine, we are now unveiling Verified Existence and Reason Architecture (V.E.R.A).
 
-To paraphrase a real legend: "Do you pine for the nice days of an AI not fooling you, or endangering your enterprise in production? Then this post might be just for you :-)" 
+To paraphrase a real legend: Do you pine for the nice days of an AI not fooling you, or endangering your enterprise in production? Then this post might be just for you :-)
 
 "I've been working on a free version of an engine to make AI actually intelligent. It has finally reached the stage where it's even usable (though may not be depending on what you want), and I am willing to put out the sources for wider distribution."
 
