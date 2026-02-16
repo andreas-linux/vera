@@ -14,6 +14,21 @@ Architecture Role:
 Author: V.E.R.A. Open Source Initiative
 Version: 0.1.0 (Prototype)
 Date: January 2026
+
+Copyright (C) 2026 V.E.R.A. Open Source Initiative
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
 """
 
 import re
@@ -332,12 +347,12 @@ class FormulaParser:
     
     def extract_universal_affirmative(self, match: re.Match, original: str,
                                        stmt_type: StatementType) -> ParseResult:
-        """Extract: 'All X are Y' → ∀x(X(x) ⊃ Y(x))"""
+        """Extract: 'All X are Y' â†’ âˆ€x(X(x) âŠƒ Y(x))"""
         subject_class = self._to_predicate_name(match.group(1))
         predicate = self._to_predicate_name(match.group(2))
         var = self._fresh_var()
         
-        # ∀x(SubjectClass(x) ⊃ Predicate(x))
+        # âˆ€x(SubjectClass(x) âŠƒ Predicate(x))
         formula = Universal(
             var,
             Implication(
@@ -358,12 +373,12 @@ class FormulaParser:
     
     def extract_universal_negative(self, match: re.Match, original: str,
                                    stmt_type: StatementType) -> ParseResult:
-        """Extract: 'No X are Y' → ∀x(X(x) ⊃ ~Y(x))"""
+        """Extract: 'No X are Y' â†’ âˆ€x(X(x) âŠƒ ~Y(x))"""
         subject_class = self._to_predicate_name(match.group(1))
         predicate = self._to_predicate_name(match.group(2))
         var = self._fresh_var()
         
-        # ∀x(SubjectClass(x) ⊃ ~Predicate(x))
+        # âˆ€x(SubjectClass(x) âŠƒ ~Predicate(x))
         formula = Universal(
             var,
             Implication(
@@ -384,12 +399,12 @@ class FormulaParser:
     
     def extract_particular_affirmative(self, match: re.Match, original: str,
                                         stmt_type: StatementType) -> ParseResult:
-        """Extract: 'Some X are Y' → ∃x(X(x) ∧ Y(x))"""
+        """Extract: 'Some X are Y' â†’ âˆƒx(X(x) âˆ§ Y(x))"""
         subject_class = self._to_predicate_name(match.group(1))
         predicate = self._to_predicate_name(match.group(2))
         var = self._fresh_var()
         
-        # ∃x(SubjectClass(x) ∧ Predicate(x))
+        # âˆƒx(SubjectClass(x) âˆ§ Predicate(x))
         formula = Existential(
             var,
             Conjunction(
@@ -410,12 +425,12 @@ class FormulaParser:
     
     def extract_particular_negative(self, match: re.Match, original: str,
                                     stmt_type: StatementType) -> ParseResult:
-        """Extract: 'Some X are not Y' → ∃x(X(x) ∧ ~Y(x))"""
+        """Extract: 'Some X are not Y' â†’ âˆƒx(X(x) âˆ§ ~Y(x))"""
         subject_class = self._to_predicate_name(match.group(1))
         predicate = self._to_predicate_name(match.group(2))
         var = self._fresh_var()
         
-        # ∃x(SubjectClass(x) ∧ ~Predicate(x))
+        # âˆƒx(SubjectClass(x) âˆ§ ~Predicate(x))
         formula = Existential(
             var,
             Conjunction(
@@ -436,7 +451,7 @@ class FormulaParser:
     
     def extract_singular_affirmative(self, match: re.Match, original: str,
                                       stmt_type: StatementType) -> ParseResult:
-        """Extract: 'X is Y' → Y(x) where x is the subject"""
+        """Extract: 'X is Y' â†’ Y(x) where x is the subject"""
         subject = self._to_subject_name(match.group(1))
         predicate = self._to_predicate_name(match.group(2))
         
@@ -455,7 +470,7 @@ class FormulaParser:
     
     def extract_singular_negative(self, match: re.Match, original: str,
                                    stmt_type: StatementType) -> ParseResult:
-        """Extract: 'X is not Y' → ~Y(x)"""
+        """Extract: 'X is not Y' â†’ ~Y(x)"""
         subject = self._to_subject_name(match.group(1))
         predicate = self._to_predicate_name(match.group(2))
         
@@ -474,7 +489,7 @@ class FormulaParser:
     
     def extract_conditional(self, match: re.Match, original: str,
                             stmt_type: StatementType) -> ParseResult:
-        """Extract: 'If P then Q' → P ⊃ Q (recursively parsed)"""
+        """Extract: 'If P then Q' â†’ P âŠƒ Q (recursively parsed)"""
         antecedent_text = match.group(1).strip()
         consequent_text = match.group(2).strip()
         
@@ -520,7 +535,7 @@ class FormulaParser:
     
     def extract_conjunction(self, match: re.Match, original: str,
                             stmt_type: StatementType) -> ParseResult:
-        """Extract: 'P and Q' → P ∧ Q"""
+        """Extract: 'P and Q' â†’ P âˆ§ Q"""
         left_text = match.group(1).strip()
         right_text = match.group(2).strip()
         
@@ -561,7 +576,7 @@ class FormulaParser:
     
     def extract_disjunction(self, match: re.Match, original: str,
                             stmt_type: StatementType) -> ParseResult:
-        """Extract: 'P or Q' → P ∨ Q"""
+        """Extract: 'P or Q' â†’ P âˆ¨ Q"""
         left_text = match.group(1).strip()
         right_text = match.group(2).strip()
         
@@ -600,7 +615,7 @@ class FormulaParser:
     
     def extract_property_query(self, match: re.Match, original: str,
                                stmt_type: StatementType) -> ParseResult:
-        """Extract: 'What is the X of Y?' → Query for X(Y)"""
+        """Extract: 'What is the X of Y?' â†’ Query for X(Y)"""
         property_name = self._to_predicate_name(match.group(1))
         subject = self._to_subject_name(match.group(2))
         
@@ -665,8 +680,8 @@ class NTPPipeline:
     Integrated pipeline combining Formula Parser and Krampitz Analyzer.
     
     This represents the first two steps of the V.E.R.A. verification:
-    1. Parse natural language → NTP Formula
-    2. Analyze formula → Existential loading characteristic
+    1. Parse natural language â†’ NTP Formula
+    2. Analyze formula â†’ Existential loading characteristic
     """
     
     def __init__(self):
@@ -767,17 +782,17 @@ def run_parser_tests():
         
         if success:
             passed += 1
-            status = "✓ PASS"
+            status = "âœ“ PASS"
         else:
             failed += 1
-            status = "✗ FAIL"
+            status = "âœ— FAIL"
         
         print(f"[{status}] \"{text}\"")
-        print(f"  Type: {result.statement_type.name} (expected: {expected_type.name}) {'✓' if type_match else '✗'}")
+        print(f"  Type: {result.statement_type.name} (expected: {expected_type.name}) {'âœ“' if type_match else 'âœ—'}")
         if result.formula:
             print(f"  Formula: {result.formula}")
             if actual_char:
-                print(f"  Characteristic: {actual_char.value} (expected: {expected_char.value if expected_char else 'N/A'}) {'✓' if char_match else '✗'}")
+                print(f"  Characteristic: {actual_char.value} (expected: {expected_char.value if expected_char else 'N/A'}) {'âœ“' if char_match else 'âœ—'}")
         print(f"  Subjects: {result.subjects}")
         print(f"  Confidence: {result.confidence:.2f}")
         if result.warnings:
@@ -819,7 +834,7 @@ def run_pipeline_demo():
             print(f"Formula: {result['parse']['formula']}")
             print(f"Type: {result['parse']['statement_type']}")
             print(f"Characteristic: {result['analysis']['characteristic']}")
-            print(f"Rule Chain: {' → '.join(result['analysis']['rule_chain'])}")
+            print(f"Rule Chain: {' â†’ '.join(result['analysis']['rule_chain'])}")
             print(f"Requires E! Check: {result['requires_existence_check']}")
             if result['subjects_to_verify']:
                 print(f"Subjects to Verify: {result['subjects_to_verify']}")
@@ -835,12 +850,12 @@ def run_pipeline_demo():
 
 if __name__ == "__main__":
     print()
-    print("╔══════════════════════════════════════════════════════════════════╗")
-    print("║     V.E.R.A. - Verified Existence and Reason Architecture        ║")
-    print("║                    Formula Parser v0.1.0                          ║")
-    print("║                                                                    ║")
-    print("║  Converting natural language to NTP formulas                      ║")
-    print("╚══════════════════════════════════════════════════════════════════╝")
+    print("â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—")
+    print("â•‘     V.E.R.A. - Verified Existence and Reason Architecture        â•‘")
+    print("â•‘                    Formula Parser v0.1.0                          â•‘")
+    print("â•‘                                                                    â•‘")
+    print("â•‘  Converting natural language to NTP formulas                      â•‘")
+    print("â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•")
     print()
     
     # Run tests
