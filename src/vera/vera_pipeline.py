@@ -1,529 +1,490 @@
 """
-V.E.R.A. Integrated Verification Pipeline
-==========================================
-Complete Triple-Layer Verification System
+V.E.R.A. Pipeline
+==================
+Full Triple-Layer Verification System
 
-This module integrates all V.E.R.A. components into a unified pipeline:
-- Layer 1: Krampitz Load Analyzer (R1-R9 existential loading)
-- Layer 2: E! Verification Service (existence checking)
-- Layer 3: D-Service (identity resolution via D1-D4)
+Integrates all three verification layers into a single query pipeline:
+    Layer 1: Krampitz Load Analyzer    -- determines e/n characteristic
+    Layer 2: E! Verification Service   -- verifies entity existence
+    Layer 3: D-Service (stub)          -- resolves identity (v0.2)
 
-The pipeline implements the Query Processing Pipeline from 
-VERA_Process_Architecture_v1.0, providing end-to-end verification
-of natural language statements.
+This module also handles:
+    - Natural language parsing (via FormulaParser)
+    - Audit trail generation (every reasoning step logged)
+    - Fail-safe refusal (REF-001) when existence cannot be verified
+
+Architecture:
+    User Query (NL)
+        --> FormulaParser     (NL to NTP formula)
+        --> KrampitzAnalyzer  (Layer 1: e or n?)
+        --> EVerificationService (Layer 2: EXISTS / NOT_EXISTS / UNKNOWN)
+        --> DService stub     (Layer 3: identity resolution)
+        --> VerifiedResponse  (with full audit trail)
 
 Author: V.E.R.A. Open Source Initiative
-Version: 0.1.0 (Prototype)
-Date: January 2026
+Version: 0.1.0
+Date: March 2026
 """
 
-from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional
-from enum import Enum
-from datetime import datetime
+import uuid
 import json
+from dataclasses import dataclass, field, asdict
+from enum import Enum
+from typing import Optional, List, Dict, Any
+from datetime import datetime
 
-# Import V.E.R.A. components
-from krampitz_analyzer import (
-    KrampitzAnalyzer, Formula, Characteristic, AnalysisResult
-)
-from formula_parser import (
-    FormulaParser, ParseResult, ParseStatus, StatementType, NTPPipeline
-)
-from e_corpus import (
-    EVerificationService, ExistenceStatus, ExistenceResult,
-    IdentityRelationType, IdentityResult, seed_test_data
-)
+from krampitz_analyzer import KrampitzAnalyzer, Characteristic
+from formula_parser import FormulaParser, ParseStatus
+from e_verification_service import EVerificationService, ExistenceStatus, ExistenceResult
 
 
 # =============================================================================
-# Verification Result Types
+# Response Types
 # =============================================================================
 
-class VerificationStatus(Enum):
-    """Final verification status for a statement."""
-    VERIFIED = "VERIFIED"        # All subjects exist, predication allowed
-    REFUSED = "REFUSED"          # Subject does not exist, cannot predicate
-    UNCERTAIN = "UNCERTAIN"      # Subject existence unknown, proceed with caution
-    VACUOUS = "VACUOUS"          # Subject doesn't exist but statement type allows (universals)
-    SKIPPED = "SKIPPED"          # n-type formula, no E! check needed
-    PARSE_ERROR = "PARSE_ERROR"  # Could not parse input
+class VerificationOutcome(Enum):
+    """Final verdict of the pipeline."""
+    VERIFIED = "VERIFIED"             # All e-type subjects confirmed EXISTS
+    REFUSAL = "REFUSAL"               # Fail-safe: one or more subjects UNKNOWN
+    NOT_EXISTS = "NOT_EXISTS"         # Subject confirmed NOT_EXISTS (fictional etc.)
+    NO_CHECK_REQUIRED = "NO_CHECK_REQUIRED"  # Formula is n-type; no E! check needed
+    PARSE_FAILED = "PARSE_FAILED"     # Could not parse input
+    ERROR = "ERROR"
 
 
 @dataclass
-class SubjectVerification:
-    """Verification result for a single subject."""
-    subject_name: str
-    existence_status: ExistenceStatus
-    entity_id: Optional[str]
-    confidence: float
-    found_in_corpus: bool
+class AuditStep:
+    """One step in the pipeline audit trail."""
+    step_number: int
+    layer: str
+    action: str
+    input_value: str
+    output_value: str
+    rule_applied: Optional[str] = None
+    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
 
 
 @dataclass
-class VerificationResult:
-    """Complete verification result for a statement."""
-    # Input
-    original_text: str
-    
-    # Parse result
-    parse_status: ParseStatus
-    statement_type: StatementType
-    formula: Optional[str]
-    
-    # Krampitz analysis
-    characteristic: Optional[Characteristic]
-    rule_chain: List[str]
-    requires_existence_check: bool
-    
-    # E! Verification
-    verification_status: VerificationStatus
-    subject_verifications: List[SubjectVerification]
-    
-    # Audit trail
-    timestamp: str
-    reasoning_chain: List[str]
-    warnings: List[str]
-    
-    def to_dict(self) -> Dict[str, Any]:
+class VerifiedResponse:
+    """
+    The output of a full VERA pipeline run.
+
+    Contains:
+    - The final outcome (VERIFIED / REFUSAL / NOT_EXISTS / NO_CHECK_REQUIRED)
+    - Subject existence results for every entity in the query
+    - Complete audit trail (every reasoning step)
+    - A human-readable summary
+    """
+    run_id: str
+    query: str
+    outcome: VerificationOutcome
+    characteristic: Optional[str]          # 'e' or 'n'
+    subjects: List[str]
+    existence_results: List[ExistenceResult]
+    audit_trail: List[AuditStep]
+    summary: str
+    error_code: Optional[str] = None
+    processing_time_ms: Optional[float] = None
+    # Capitalised entity candidates detected in the query but NOT
+    # extracted as subjects, and therefore NOT verified (defect P1-C).
+    # Surfaced so a caller can never mistake a subject-only check for
+    # full-claim verification. Multi-entity claim extraction remains
+    # the CONTRIBUTING-flagged research problem.
+    unchecked_entity_candidates: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
         return {
-            "original_text": self.original_text,
-            "parse_status": self.parse_status.name,
-            "statement_type": self.statement_type.name,
-            "formula": self.formula,
-            "characteristic": self.characteristic.value if self.characteristic else None,
-            "rule_chain": self.rule_chain,
-            "requires_existence_check": self.requires_existence_check,
-            "verification_status": self.verification_status.value,
-            "subject_verifications": [
+            "run_id": self.run_id,
+            "query": self.query,
+            "outcome": self.outcome.value,
+            "characteristic": self.characteristic,
+            "subjects": self.subjects,
+            "unchecked_entity_candidates": self.unchecked_entity_candidates,
+            "existence_results": [r.to_dict() for r in self.existence_results],
+            "audit_trail": [
                 {
-                    "subject": sv.subject_name,
-                    "status": sv.existence_status.value,
-                    "confidence": sv.confidence,
-                    "found": sv.found_in_corpus
-                } for sv in self.subject_verifications
+                    "step": s.step_number,
+                    "layer": s.layer,
+                    "action": s.action,
+                    "input": s.input_value,
+                    "output": s.output_value,
+                    "rule": s.rule_applied,
+                    "timestamp": s.timestamp,
+                }
+                for s in self.audit_trail
             ],
-            "timestamp": self.timestamp,
-            "reasoning_chain": self.reasoning_chain,
-            "warnings": self.warnings
+            "summary": self.summary,
+            "error_code": self.error_code,
+            "processing_time_ms": self.processing_time_ms,
         }
-    
+
     def to_json(self, indent: int = 2) -> str:
         return json.dumps(self.to_dict(), indent=indent)
-    
-    def get_human_readable_result(self) -> str:
-        """Generate a human-readable explanation of the verification."""
-        lines = []
-        lines.append(f"Statement: \"{self.original_text}\"")
-        lines.append(f"Formula: {self.formula}")
-        lines.append(f"Characteristic: {self.characteristic.value if self.characteristic else 'N/A'} ({self._explain_characteristic()})")
-        lines.append(f"Verification: {self.verification_status.value}")
-        lines.append("")
-        lines.append("Reasoning Chain:")
-        for i, step in enumerate(self.reasoning_chain, 1):
-            lines.append(f"  {i}. {step}")
-        
-        if self.warnings:
-            lines.append("")
-            lines.append("Warnings:")
-            for w in self.warnings:
-                lines.append(f"  ⚠ {w}")
-        
-        return "\n".join(lines)
-    
-    def _explain_characteristic(self) -> str:
-        if self.characteristic == Characteristic.E:
-            return "existentially loaded - requires subjects to exist"
-        elif self.characteristic == Characteristic.N:
-            return "not existentially loaded - no existence requirement"
-        return "unknown"
+
+    def print_audit_trail(self) -> None:
+        """Print a human-readable audit trail."""
+        print(f"\nAudit Trail -- Run ID: {self.run_id}")
+        print("-" * 60)
+        for step in self.audit_trail:
+            print(f"  Step {step.step_number} [{step.layer}]  {step.action}")
+            print(f"    In:  {step.input_value}")
+            print(f"    Out: {step.output_value}")
+            if step.rule_applied:
+                print(f"    Rule: {step.rule_applied}")
+        print("-" * 60)
 
 
 # =============================================================================
-# V.E.R.A. Integrated Pipeline
+# D-Service Stub (Layer 3 -- v0.2)
+# =============================================================================
+
+class DServiceStub:
+    """
+    Stub implementation of the D-Service (Layer 3).
+
+    Full implementation deferred to v0.2. This stub passes identity
+    checks through without resolution, logging the gap explicitly.
+
+    NTP Basis:
+        D1: Weak Distinguishability    (x#y)    -- at least one exists
+        D2: Weak Indiscernibility      (~(x#y)) -- equivalence relation
+        D3: Strong Distinguishability  (x != y) -- both must exist
+        D4: Strong Indiscernibility    (~(x != y)) -- context-sensitive
+    """
+
+    def resolve(self, entity_a: str, entity_b: str) -> Dict[str, Any]:
+        return {
+            "relation_type": "UNKNOWN",
+            "ntp_relation": "unresolved",
+            "confidence": 0.0,
+            "note": "D-Service identity resolution not yet implemented (v0.2 milestone).",
+            "entity_a": entity_a,
+            "entity_b": entity_b,
+        }
+
+
+# =============================================================================
+# VERA Pipeline
 # =============================================================================
 
 class VERAPipeline:
     """
-    V.E.R.A. Integrated Verification Pipeline
-    
-    Implements the complete triple-layer verification flow:
-    
-    1. Parse natural language → NTP formula (Formula Parser)
-    2. Analyze formula → existential loading (Krampitz Analyzer)
-    3. If e-type, verify subjects exist (E! Verification Service)
-    4. Return verified result with complete reasoning chain
-    
-    This is the core engine that prevents hallucination by enforcing
-    NTP Rule R1: Elementary predicates require subject existence.
+    The full V.E.R.A. triple-layer verification pipeline.
+
+    Takes a natural language query and returns a VerifiedResponse with:
+    - Existence verification for every entity subject
+    - Full NTP rule chain trace
+    - Immutable audit trail
+    - Fail-safe refusal when existence is unverifiable
+
+    Usage:
+        pipeline = VERAPipeline()
+        response = pipeline.run("Aspirin is an analgesic.")
+        print(response.outcome)         # VerificationOutcome.VERIFIED
+        print(response.summary)
+        response.print_audit_trail()
     """
-    
-    def __init__(self, corpus_db_path: str = ":memory:", seed_data: bool = True):
-        """
-        Initialize the V.E.R.A. pipeline.
-        
-        Args:
-            corpus_db_path: Path to E! Corpus database
-            seed_data: Whether to seed test data (for demo/testing)
-        """
-        # Initialize components
+
+    def __init__(self, db_path: str = ":memory:"):
         self.parser = FormulaParser()
-        self.analyzer = KrampitzAnalyzer()
-        self.e_service = EVerificationService(corpus_db_path)
-        
-        # Optionally seed test data
-        if seed_data:
-            seed_test_data(self.e_service)
-    
-    def verify(self, text: str) -> VerificationResult:
+        self.krampitz = KrampitzAnalyzer()
+        self.e_service = EVerificationService(db_path=db_path)
+        self.d_service = DServiceStub()
+
+    def run(self, query: str) -> VerifiedResponse:
         """
-        Verify a natural language statement through the complete pipeline.
-        
-        This implements the 10-step Query Processing Pipeline from
-        VERA_Process_Architecture_v1.0.
-        
+        Execute the full verification pipeline for a natural language query.
+
+        Pipeline steps:
+            1. Parse NL to NTP formula
+            2. Determine existential loading (Krampitz, Layer 1)
+            3. If e-type: verify each subject entity (E! Service, Layer 2)
+            4. Apply fail-safe refusal if any subject is UNKNOWN
+            5. Return VerifiedResponse with full audit trail
+
         Args:
-            text: Natural language statement to verify
-            
+            query: Natural language statement to verify.
+
         Returns:
-            VerificationResult with complete analysis and reasoning chain
+            VerifiedResponse with outcome and complete audit trail.
         """
-        timestamp = datetime.utcnow().isoformat()
-        reasoning_chain = []
-        warnings = []
-        
-        # Step 1: Parse natural language to NTP formula
-        reasoning_chain.append(f"Received input: \"{text}\"")
-        parse_result = self.parser.parse(text)
-        
-        if parse_result.status == ParseStatus.FAILED:
-            reasoning_chain.append("PARSE FAILED: Could not convert to NTP formula")
-            return VerificationResult(
-                original_text=text,
-                parse_status=parse_result.status,
-                statement_type=parse_result.statement_type,
-                formula=None,
-                characteristic=None,
-                rule_chain=[],
-                requires_existence_check=False,
-                verification_status=VerificationStatus.PARSE_ERROR,
-                subject_verifications=[],
-                timestamp=timestamp,
-                reasoning_chain=reasoning_chain,
-                warnings=parse_result.warnings
-            )
-        
-        reasoning_chain.append(f"Parsed to formula: {parse_result.formula}")
-        reasoning_chain.append(f"Statement type: {parse_result.statement_type.name}")
-        warnings.extend(parse_result.warnings)
-        
-        # Step 2: Analyze existential loading (Krampitz Rules R1-R9)
-        krampitz_result = self.analyzer.analyze(parse_result.formula)
-        
-        reasoning_chain.append(f"Krampitz analysis: characteristic = {krampitz_result.characteristic.value}")
-        reasoning_chain.append(f"Rule chain applied: {' → '.join(krampitz_result.rule_chain)}")
-        
-        # Step 3: Determine if E! verification is needed
-        if krampitz_result.characteristic == Characteristic.N:
-            # n-type: No existence requirement
-            reasoning_chain.append("Formula is n-type (not existentially loaded)")
-            reasoning_chain.append("No existence verification required - statement is safe")
-            
-            return VerificationResult(
-                original_text=text,
-                parse_status=parse_result.status,
-                statement_type=parse_result.statement_type,
-                formula=str(parse_result.formula),
-                characteristic=krampitz_result.characteristic,
-                rule_chain=krampitz_result.rule_chain,
-                requires_existence_check=False,
-                verification_status=VerificationStatus.SKIPPED,
-                subject_verifications=[],
-                timestamp=timestamp,
-                reasoning_chain=reasoning_chain,
-                warnings=warnings
-            )
-        
-        # e-type: Must verify subjects exist
-        reasoning_chain.append("Formula is e-type (existentially loaded)")
-        reasoning_chain.append("Existence verification REQUIRED per NTP Rule R1")
-        
-        # Step 4: Extract and verify subjects
+        run_id = str(uuid.uuid4())[:8]
+        start = datetime.utcnow()
+        audit: List[AuditStep] = []
+        step = 0
+
+        # ----------------------------------------------------------------
+        # Step 1: Parse natural language
+        # ----------------------------------------------------------------
+        step += 1
+        parse_result = self.parser.parse(query)
+        audit.append(AuditStep(
+            step_number=step,
+            layer="FormulaParser",
+            action="Parse natural language to NTP formula",
+            input_value=query,
+            output_value=str(parse_result.formula) if parse_result.formula else f"FAILED ({parse_result.status.name})",
+        ))
+
+        if parse_result.status == ParseStatus.FAILED or parse_result.formula is None:
+            return self._error_response(run_id, query, audit, start,
+                                        "VERA-005", "Could not parse query into NTP formula.")
+
         subjects = parse_result.subjects
-        reasoning_chain.append(f"Subjects to verify: {subjects}")
-        
-        subject_verifications = []
-        all_exist = True
-        any_not_exist = False
-        any_unknown = False
-        
-        for subject in subjects:
-            e_result = self.e_service.exists(subject)
-            
-            sv = SubjectVerification(
-                subject_name=subject,
-                existence_status=e_result.existence_status,
-                entity_id=e_result.entity_id,
-                confidence=e_result.confidence,
-                found_in_corpus=e_result.found_in_corpus
+        audit.append(AuditStep(
+            step_number=step,
+            layer="FormulaParser",
+            action="Extract subject terms",
+            input_value=str(parse_result.formula),
+            output_value=f"Subjects: {subjects}  |  Statement type: {parse_result.statement_type.name}",
+        ))
+
+        # Parser warnings are part of the reasoning record. In particular,
+        # a removed subordinate clause (defect P1-B) is unparsed and
+        # unverified content; the audit trail must say so.
+        if parse_result.warnings:
+            audit.append(AuditStep(
+                step_number=step,
+                layer="FormulaParser",
+                action="Record parser warnings",
+                input_value=query,
+                output_value=" | ".join(parse_result.warnings),
+            ))
+
+        # Embedded entity candidates detected but NOT extracted as
+        # subjects, and therefore NOT verified below (defect P1-C).
+        # Surfacing them prevents a subject-only check being read as
+        # full-claim verification.
+        subjects_lc = {s.lower() for s in subjects}
+        candidates = [
+            c for c in getattr(parse_result, "entity_candidates", [])
+            if c.lower() not in subjects_lc
+        ]
+        descriptive = set(getattr(parse_result, "descriptive_subjects", []))
+        if candidates:
+            audit.append(AuditStep(
+                step_number=step,
+                layer="FormulaParser",
+                action="Surface unchecked embedded entity candidates",
+                input_value=query,
+                output_value=(
+                    f"Candidates NOT verified: {candidates}. Multi-entity claim "
+                    f"extraction is a v0.2 research problem (see CONTRIBUTING)."
+                ),
+            ))
+
+        # ----------------------------------------------------------------
+        # Step 2: Krampitz analysis (Layer 1)
+        # ----------------------------------------------------------------
+        step += 1
+        krampitz_result = self.krampitz.analyze(parse_result.formula)
+        characteristic = krampitz_result.characteristic
+        audit.append(AuditStep(
+            step_number=step,
+            layer="KrampitzAnalyzer (Layer 1)",
+            action="Determine existential loading",
+            input_value=str(parse_result.formula),
+            output_value=f"Characteristic: {characteristic.value}  |  Requires E! check: {krampitz_result.requires_existence_check}",
+            rule_applied=" -> ".join(krampitz_result.rule_chain),
+        ))
+
+        # ----------------------------------------------------------------
+        # Step 3: If n-type, no existence check required
+        # ----------------------------------------------------------------
+        if characteristic == Characteristic.N:
+            summary = (
+                f"Formula '{parse_result.formula}' is n-type (no existence presupposition). "
+                f"No E! verification required. Statement is logically valid regardless of "
+                f"whether subjects exist."
             )
-            subject_verifications.append(sv)
-            
-            if e_result.existence_status == ExistenceStatus.EXISTS:
-                reasoning_chain.append(f"  E!({subject}) = EXISTS ✓ (confidence: {e_result.confidence:.2f})")
+            if candidates:
+                summary += (
+                    f" NOTE: embedded entity candidate(s) detected and NOT verified: "
+                    f"{candidates}."
+                )
+            elapsed = (datetime.utcnow() - start).total_seconds() * 1000
+            return VerifiedResponse(
+                run_id=run_id,
+                query=query,
+                outcome=VerificationOutcome.NO_CHECK_REQUIRED,
+                characteristic=characteristic.value,
+                subjects=subjects,
+                existence_results=[],
+                audit_trail=audit,
+                summary=summary,
+                processing_time_ms=round(elapsed, 2),
+                unchecked_entity_candidates=candidates,
+            )
+
+        # ----------------------------------------------------------------
+        # Step 4: E! Verification (Layer 2) -- for each subject
+        # ----------------------------------------------------------------
+        existence_results: List[ExistenceResult] = []
+        unverified: List[str] = []
+        nonexistent: List[str] = []
+
+        for subject in subjects:
+            step += 1
+            e_result = self.e_service.check_existence(subject, pipeline_run_id=run_id)
+            existence_results.append(e_result)
+
+            audit.append(AuditStep(
+                step_number=step,
+                layer="EVerificationService (Layer 2)",
+                action=f"Check existence of '{subject}'",
+                input_value=subject,
+                output_value=(
+                    f"{e_result.existence_status.value}  |  "
+                    f"Canonical: '{e_result.canonical_name or 'n/a'}'  |  "
+                    f"Confidence: {e_result.confidence:.2f}"
+                ),
+                rule_applied="IF-002 E! Corpus lookup",
+            ))
+
+            if e_result.existence_status == ExistenceStatus.UNKNOWN:
+                unverified.append(subject)
             elif e_result.existence_status == ExistenceStatus.NOT_EXISTS:
-                reasoning_chain.append(f"  E!({subject}) = NOT_EXISTS ✗ (confirmed fictional/mythological)")
-                any_not_exist = True
-                all_exist = False
+                nonexistent.append(subject)
+
+        # ----------------------------------------------------------------
+        # Step 5: Determine final outcome
+        # ----------------------------------------------------------------
+        step += 1
+        elapsed = (datetime.utcnow() - start).total_seconds() * 1000
+        error_code = None
+
+        if nonexistent:
+            outcome = VerificationOutcome.NOT_EXISTS
+            summary = (
+                f"EXISTENCE FIREWALL: The subject(s) {nonexistent} are confirmed NOT to exist "
+                f"in the E! Corpus. Any predication about a non-existent entity is a hallucination "
+                f"under NTP. Query rejected."
+            )
+            audit.append(AuditStep(
+                step_number=step,
+                layer="VERAPipeline",
+                action="Apply existence-predication firewall",
+                input_value=f"NOT_EXISTS subjects: {nonexistent}",
+                output_value="REJECTED -- subject does not exist",
+                rule_applied="NTP Architecture Principle 1: Wall of Separation",
+            ))
+
+        elif unverified:
+            outcome = VerificationOutcome.REFUSAL
+            descriptive_unverified = [s for s in unverified if s in descriptive]
+            plain_unverified = [s for s in unverified if s not in descriptive]
+
+            if descriptive_unverified:
+                # Defect P1-D: a descriptive noun phrase (definite
+                # description) is not an entity constant, so an E! Corpus
+                # lookup on it is meaningless. The refusal states the real
+                # reason instead of reading as a plain corpus miss. The
+                # fail-safe stands either way.
+                error_code = "VERA-006"
+                summary = (
+                    f"REFUSAL (VERA-006, v0.1 parser scope): the subject(s) "
+                    f"{descriptive_unverified} are descriptive noun phrases (definite "
+                    f"descriptions), not entity constants. Definite-description "
+                    f"resolution is out of scope for the v0.1 parser, so no meaningful "
+                    f"E! Corpus lookup is possible; this is not a corpus miss. "
+                    f"The fail-safe refusal stands."
+                )
+                if plain_unverified:
+                    summary += (
+                        f" Additionally, the subject(s) {plain_unverified} could not "
+                        f"be verified in the E! Corpus (REF-001)."
+                    )
+                audit.append(AuditStep(
+                    step_number=step,
+                    layer="VERAPipeline",
+                    action="Apply parser-scope refusal (VERA-006)",
+                    input_value=f"Descriptive subjects: {descriptive_unverified}",
+                    output_value="REFUSAL -- descriptive noun phrase, not an entity constant (v0.1 parser scope, not a corpus miss)",
+                    rule_applied="VERA-006: Parser scope refusal (definite description)",
+                ))
             else:
-                reasoning_chain.append(f"  E!({subject}) = UNKNOWN ⚠ (not in E! Corpus)")
-                any_unknown = True
-                all_exist = False
-        
-        # Step 5: Determine final verification status
-        if all_exist:
-            verification_status = VerificationStatus.VERIFIED
-            reasoning_chain.append("All subjects verified to exist")
-            reasoning_chain.append("PREDICATION ALLOWED - statement may proceed")
-        elif any_not_exist:
-            # Check if this is a universal statement (vacuously true is OK)
-            if parse_result.statement_type in (StatementType.UNIVERSAL_AFFIRMATIVE, 
-                                                StatementType.UNIVERSAL_NEGATIVE):
-                verification_status = VerificationStatus.VACUOUS
-                reasoning_chain.append("Subject confirmed not to exist, but universal statement")
-                reasoning_chain.append("VACUOUSLY TRUE - predication allowed but empty domain")
-            else:
-                verification_status = VerificationStatus.REFUSED
-                reasoning_chain.append("Subject confirmed not to exist")
-                reasoning_chain.append("PREDICATION REFUSED - would assert about non-existent entity")
+                summary = (
+                    f"FAIL-SAFE REFUSAL (REF-001): The subject(s) {unverified} could not be verified "
+                    f"in the E! Corpus. V.E.R.A. cannot assert properties about entities whose "
+                    f"existence is unconfirmed. Integrity over answers."
+                )
+                audit.append(AuditStep(
+                    step_number=step,
+                    layer="VERAPipeline",
+                    action="Apply fail-safe refusal (REF-001)",
+                    input_value=f"UNKNOWN subjects: {unverified}",
+                    output_value="REFUSAL -- existence unverifiable",
+                    rule_applied="REF-001: Fail-Safe Refusal",
+                ))
+
         else:
-            verification_status = VerificationStatus.UNCERTAIN
-            reasoning_chain.append("Subject existence unknown (not in E! Corpus)")
-            reasoning_chain.append("UNCERTAIN - proceed with qualification or refuse")
-            warnings.append("Entity not found in E! Corpus - existence cannot be verified")
-        
-        return VerificationResult(
-            original_text=text,
-            parse_status=parse_result.status,
-            statement_type=parse_result.statement_type,
-            formula=str(parse_result.formula),
-            characteristic=krampitz_result.characteristic,
-            rule_chain=krampitz_result.rule_chain,
-            requires_existence_check=True,
-            verification_status=verification_status,
-            subject_verifications=subject_verifications,
-            timestamp=timestamp,
-            reasoning_chain=reasoning_chain,
-            warnings=warnings
+            outcome = VerificationOutcome.VERIFIED
+            verified_names = [r.canonical_name for r in existence_results if r.canonical_name]
+            summary = (
+                f"VERIFIED: All subjects {verified_names} confirmed to exist in the E! Corpus. "
+                f"Formula characteristic: {characteristic.value}. "
+                f"Predication is grounded in verified existence."
+            )
+            audit.append(AuditStep(
+                step_number=step,
+                layer="VERAPipeline",
+                action="Confirm verification",
+                input_value=f"All subjects: {subjects}",
+                output_value=f"VERIFIED -- existence confirmed for all subjects",
+                rule_applied="NTP: E! precedes M (predication follows verified existence)",
+            ))
+
+        if candidates:
+            summary += (
+                f" NOTE: unchecked embedded entity candidate(s) detected and NOT "
+                f"verified: {candidates}. Verification above covers the extracted "
+                f"subject(s) only; multi-entity claim extraction is a v0.2 research "
+                f"problem."
+            )
+
+        return VerifiedResponse(
+            run_id=run_id,
+            query=query,
+            outcome=outcome,
+            characteristic=characteristic.value,
+            subjects=subjects,
+            existence_results=existence_results,
+            audit_trail=audit,
+            summary=summary,
+            error_code=error_code,
+            processing_time_ms=round(elapsed, 2),
+            unchecked_entity_candidates=candidates,
         )
-    
-    def resolve_identity(self, entity_a: str, entity_b: str) -> IdentityResult:
-        """
-        Resolve identity between two entity references.
-        
-        Delegates to D-Service (E! Verification Service identity resolution).
-        
-        Args:
-            entity_a: First entity name
-            entity_b: Second entity name
-            
-        Returns:
-            IdentityResult with NTP relation (D1-D4)
-        """
-        return self.e_service.resolve_identity(entity_a, entity_b)
-    
-    def get_corpus_stats(self) -> Dict[str, Any]:
-        """Get statistics about the E! Corpus."""
-        return self.e_service.get_corpus_stats()
-    
-    def close(self):
-        """Close database connections."""
+
+    def close(self) -> None:
         self.e_service.close()
 
+    # ----------------------------------------------------------------
+    # Private helpers
+    # ----------------------------------------------------------------
 
-# =============================================================================
-# Test Suite
-# =============================================================================
-
-def run_integration_tests():
-    """Run comprehensive integration tests for the full pipeline."""
-    print("=" * 70)
-    print("V.E.R.A. Integrated Pipeline - Integration Test Suite")
-    print("=" * 70)
-    print()
-    
-    pipeline = VERAPipeline(":memory:", seed_data=True)
-    
-    stats = pipeline.get_corpus_stats()
-    print(f"E! Corpus loaded: {stats['total_entities']} entities")
-    print()
-    
-    test_cases = [
-        # n-type statements (no E! check needed)
-        {
-            "input": "All swans are white",
-            "expected_status": VerificationStatus.SKIPPED,
-            "expected_char": Characteristic.N,
-            "description": "Universal affirmative - n-type, no E! check"
-        },
-        {
-            "input": "No fish are mammals",
-            "expected_status": VerificationStatus.SKIPPED,
-            "expected_char": Characteristic.N,
-            "description": "Universal negative - n-type, no E! check"
-        },
-        
-        # e-type with existing subject
-        {
-            "input": "Socrates is mortal",
-            "expected_status": VerificationStatus.VERIFIED,
-            "expected_char": Characteristic.E,
-            "description": "Singular affirmative - subject EXISTS"
-        },
-        {
-            "input": "Albert Einstein is a physicist",
-            "expected_status": VerificationStatus.VERIFIED,
-            "expected_char": Characteristic.E,
-            "description": "Singular affirmative - subject EXISTS (via alias)"
-        },
-        {
-            "input": "The Higgs boson is an elementary particle",
-            "expected_status": VerificationStatus.VERIFIED,
-            "expected_char": Characteristic.E,
-            "description": "Singular affirmative - verified scientific entity"
-        },
-        
-        # e-type with non-existing subject (fictional)
-        {
-            "input": "Unicorns have magical powers",
-            "expected_status": VerificationStatus.REFUSED,
-            "expected_char": Characteristic.E,
-            "description": "Singular affirmative - subject NOT_EXISTS (fictional)"
-        },
-        {
-            "input": "Sherlock Holmes lives in London",
-            "expected_status": VerificationStatus.REFUSED,
-            "expected_char": Characteristic.E,
-            "description": "Singular affirmative - subject NOT_EXISTS (fictional)"
-        },
-        
-        # e-type with unknown subject (potential hallucination)
-        {
-            "input": "Professor Smith published a paper",
-            "expected_status": VerificationStatus.UNCERTAIN,
-            "expected_char": Characteristic.E,
-            "description": "Singular affirmative - subject UNKNOWN (would hallucinate)"
-        },
-        {
-            "input": "The XYZ Corporation announced earnings",
-            "expected_status": VerificationStatus.UNCERTAIN,
-            "expected_char": Characteristic.E,
-            "description": "Singular affirmative - subject UNKNOWN (would hallucinate)"
-        },
-        
-        # Existence claims
-        {
-            "input": "Does the Higgs boson exist?",
-            "expected_status": VerificationStatus.VERIFIED,
-            "expected_char": Characteristic.E,
-            "description": "Existence claim - subject EXISTS"
-        },
-        {
-            "input": "Unicorns exist",
-            "expected_status": VerificationStatus.REFUSED,
-            "expected_char": Characteristic.E,
-            "description": "Existence claim - subject NOT_EXISTS"
-        },
-        
-        # Particular statements (existentially loaded)
-        {
-            "input": "Some birds are black",
-            "expected_status": VerificationStatus.UNCERTAIN,
-            "expected_char": Characteristic.E,
-            "description": "Particular affirmative - class not verified"
-        },
-    ]
-    
-    passed = 0
-    failed = 0
-    
-    for test in test_cases:
-        result = pipeline.verify(test["input"])
-        
-        status_match = result.verification_status == test["expected_status"]
-        char_match = result.characteristic == test["expected_char"]
-        
-        if status_match and char_match:
-            passed += 1
-            status = "✓ PASS"
-        else:
-            failed += 1
-            status = "✗ FAIL"
-        
-        print(f"[{status}] {test['description']}")
-        print(f"  Input: \"{test['input']}\"")
-        print(f"  Formula: {result.formula}")
-        print(f"  Characteristic: {result.characteristic.value if result.characteristic else 'N/A'} (expected: {test['expected_char'].value}) {'✓' if char_match else '✗'}")
-        print(f"  Status: {result.verification_status.value} (expected: {test['expected_status'].value}) {'✓' if status_match else '✗'}")
-        if result.subject_verifications:
-            for sv in result.subject_verifications:
-                print(f"    Subject '{sv.subject_name}': {sv.existence_status.value}")
-        print()
-    
-    print("=" * 70)
-    print(f"Results: {passed} passed, {failed} failed out of {len(test_cases)} tests")
-    print("=" * 70)
-    
-    pipeline.close()
-    return passed, failed
-
-
-def run_demo():
-    """Run interactive demonstration of the V.E.R.A. pipeline."""
-    print()
-    print("=" * 70)
-    print("V.E.R.A. Pipeline - Hallucination Prevention Demo")
-    print("=" * 70)
-    print()
-    
-    pipeline = VERAPipeline(":memory:", seed_data=True)
-    
-    demo_statements = [
-        "All swans are white",
-        "Socrates is mortal",
-        "Some unicorns have golden horns",
-        "Professor Smith from MIT published a groundbreaking paper",
-        "The Higgs boson has a mass of 125 GeV",
-        "Zeus lives on Mount Olympus",
-    ]
-    
-    for statement in demo_statements:
-        print(f"{'='*60}")
-        result = pipeline.verify(statement)
-        print(result.get_human_readable_result())
-        print()
-    
-    # Demo: Identity resolution
-    print("=" * 60)
-    print("Identity Resolution Demo (D-Service)")
-    print("=" * 60)
-    print()
-    
-    identity_tests = [
-        ("Albert Einstein", "A. Einstein"),
-        ("Albert Einstein", "Socrates"),
-        ("Unicorn", "Pegasus"),
-    ]
-    
-    for entity_a, entity_b in identity_tests:
-        result = pipeline.resolve_identity(entity_a, entity_b)
-        print(f"resolve_identity(\"{entity_a}\", \"{entity_b}\")")
-        print(f"  Relation: {result.relation_type.value}")
-        print(f"  NTP Symbol: {result.ntp_relation}")
-        print(f"  Both Exist: {result.both_exist}")
-        print()
-    
-    pipeline.close()
+    def _error_response(
+        self,
+        run_id: str,
+        query: str,
+        audit: List[AuditStep],
+        start: datetime,
+        error_code: str,
+        message: str,
+    ) -> VerifiedResponse:
+        elapsed = (datetime.utcnow() - start).total_seconds() * 1000
+        return VerifiedResponse(
+            run_id=run_id,
+            query=query,
+            outcome=VerificationOutcome.ERROR,
+            characteristic=None,
+            subjects=[],
+            existence_results=[],
+            audit_trail=audit,
+            summary=message,
+            error_code=error_code,
+            processing_time_ms=round(elapsed, 2),
+        )
 
 
 # =============================================================================
@@ -532,26 +493,28 @@ def run_demo():
 
 if __name__ == "__main__":
     print()
-    print("╔══════════════════════════════════════════════════════════════════╗")
-    print("║     V.E.R.A. - Verified Existence and Reason Architecture        ║")
-    print("║              Integrated Verification Pipeline v0.1.0              ║")
-    print("║                                                                    ║")
-    print("║  'Truth is a feature, not an option.'                             ║")
-    print("╚══════════════════════════════════════════════════════════════════╝")
-    print()
-    
-    # Run integration tests
-    passed, failed = run_integration_tests()
-    
-    # Run demo
-    run_demo()
-    
     print("=" * 70)
-    print("V.E.R.A. Pipeline Ready")
-    print()
-    print("Usage:")
-    print("  from vera_pipeline import VERAPipeline")
-    print("  pipeline = VERAPipeline('corpus.db')")
-    print("  result = pipeline.verify('Socrates is mortal')")
-    print("  print(result.verification_status)  # → VERIFIED")
+    print("  V.E.R.A. -- Triple-Layer Verification Pipeline v0.1.0")
+    print("  'Truth is a feature, not an option.'")
     print("=" * 70)
+
+    pipeline = VERAPipeline()
+
+    demo_queries = [
+        "Aspirin is an analgesic.",
+        "Sherlock Holmes is a detective.",
+        "All swans are white.",
+        "Zarkonite is a rare mineral.",
+        "Socrates is mortal.",
+    ]
+
+    for query in demo_queries:
+        print(f"\nQuery: '{query}'")
+        response = pipeline.run(query)
+        print(f"Outcome:    {response.outcome.value}")
+        print(f"Char:       {response.characteristic or 'N/A'}")
+        print(f"Subjects:   {response.subjects}")
+        print(f"Summary:    {response.summary[:100]}...")
+        print(f"Time:       {response.processing_time_ms}ms")
+
+    pipeline.close()

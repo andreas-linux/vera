@@ -7,7 +7,7 @@ name = "vera-ntp"
 version = "0.1.0"
 description = "V.E.R.A. - Verified Existence and Reason Architecture: AI Hallucination Prevention using Non-Traditional Predication Theory"
 readme = "README.md"
-license = {text = "MIT"}
+license = {text = "GPL-3.0-or-later"}
 requires-python = ">=3.10"
 authors = [
     {name = "Andreas Hamberger", email = "andreas@vera-project.org"},
@@ -31,7 +31,7 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
@@ -73,11 +73,11 @@ all = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/vera-project/vera"
-Documentation = "https://vera-project.github.io/vera"
-Repository = "https://github.com/vera-project/vera.git"
-Issues = "https://github.com/vera-project/vera/issues"
-Changelog = "https://github.com/vera-project/vera/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/andreas-linux/vera"
+Documentation = "https://github.com/andreas-linux/vera"
+Repository = "https://github.com/andreas-linux/vera.git"
+Issues = "https://github.com/andreas-linux/vera/issues"
+Changelog = "https://github.com/andreas-linux/vera/blob/main/CHANGELOG.md"
 
 [project.scripts]
 vera = "vera.cli:main"

@@ -85,6 +85,15 @@ class ParseResult:
     confidence: float  # 0.0 to 1.0
     warnings: List[str] = field(default_factory=list)
     alternatives: List['ParseResult'] = field(default_factory=list)
+    # Capitalised entity candidates present in the text but NOT extracted
+    # as subjects. Surfaced so the pipeline can flag what was not verified
+    # (defect P1-C). Full multi-entity claim extraction remains the
+    # CONTRIBUTING-flagged research problem.
+    entity_candidates: List[str] = field(default_factory=list)
+    # Subjects that are descriptive noun phrases (definite descriptions),
+    # not entity constants. The pipeline uses this to state the real
+    # refusal reason instead of presenting a plain corpus miss (P1-D).
+    descriptive_subjects: List[str] = field(default_factory=list)
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -95,7 +104,9 @@ class ParseResult:
             "subjects": self.subjects,
             "predicates": self.predicates,
             "confidence": self.confidence,
-            "warnings": self.warnings
+            "warnings": self.warnings,
+            "entity_candidates": self.entity_candidates,
+            "descriptive_subjects": self.descriptive_subjects
         }
 
 
@@ -290,11 +301,39 @@ class FormulaParser:
         words = phrase.strip().split()
         return ''.join(word.capitalize() for word in words)
     
+    # Punctuation stripped from the ends of extracted subject tokens.
+    # Internal hyphens and apostrophes are preserved (anti-inflammatory,
+    # O'Brien).
+    _TOKEN_EDGE_PUNCT = ".,;:!?\"'()[]{}"
+
+    # Words that begin a capitalised run for orthographic reasons only
+    # (sentence-initial position, quantifiers, articles). Used by the
+    # entity candidate detector.
+    _CANDIDATE_STOPWORDS = {
+        "the", "a", "an", "if", "all", "no", "some", "every", "there",
+        "what", "does", "do", "is", "are", "both", "either", "whenever",
+        "it", "this", "that", "these", "those", "i", "not", "then",
+    }
+
+    def _clean_subject_token(self, token: str) -> str:
+        """
+        Normalise an extracted subject token (defect P1-A).
+
+        Strips leading and trailing punctuation and collapses internal
+        whitespace. Without this, fallback extraction captured tokens
+        such as 'aspirin,' (with the comma), which then missed real
+        E! Corpus entries and produced false refusals of verified
+        entities.
+        """
+        token = token.strip().strip(self._TOKEN_EDGE_PUNCT)
+        token = re.sub(r'\s+', ' ', token)
+        return token.strip()
+
     def _to_subject_name(self, phrase: str) -> str:
         """Convert a phrase to a subject/constant name."""
-        # Keep as-is but strip articles
+        # Strip articles, then normalise the token edges (P1-A).
         phrase = re.sub(r'^(a|an|the)\s+', '', phrase.strip())
-        return phrase
+        return self._clean_subject_token(phrase)
     
     def parse(self, text: str) -> ParseResult:
         """
@@ -311,6 +350,43 @@ class FormulaParser:
         normalized = self._normalize(text)
         
         # Try each pattern
+        result = self._match_patterns(normalized, original)
+        
+        # No pattern matched: try reducing one inserted subordinate
+        # clause to expose the main clause (defect P1-B). Applied only
+        # when the full sentence matched no pattern, so constructions
+        # that already parse are never touched.
+        if result is None:
+            reduction = self._reduce_parenthetical(normalized)
+            if reduction:
+                reduced_text, removed_clause = reduction
+                reduced_result = self._match_patterns(reduced_text, original)
+                if reduced_result is not None:
+                    reduced_result.confidence = round(reduced_result.confidence * 0.9, 4)
+                    reduced_result.warnings.append(
+                        f"Subordinate clause '{removed_clause}' removed to parse the "
+                        f"main clause; the clause content was NOT parsed or verified "
+                        f"(multi-clause claim extraction is a v0.2 research problem)."
+                    )
+                    result = reduced_result
+        
+        # Still nothing: fall back to token guessing
+        if result is None:
+            result = self._fallback_parse(normalized, original)
+        
+        # Annotation choke point (defects P1-C and P1-D): every result,
+        # whichever path produced it, is annotated with embedded entity
+        # candidates and descriptive-subject flags before it leaves the
+        # parser.
+        result.entity_candidates = self._detect_entity_candidates(original, result.subjects)
+        result.descriptive_subjects = self._flag_descriptive_subjects(original, result.subjects)
+        return result
+    
+    def _match_patterns(self, normalized: str, original: str) -> Optional[ParseResult]:
+        """
+        Run the pattern table against normalised text.
+        Returns None when no pattern produces a usable result.
+        """
         for rule in self.patterns:
             match = re.match(rule.pattern, normalized, re.IGNORECASE)
             if match:
@@ -319,9 +395,90 @@ class FormulaParser:
                     result = extractor(match, original, rule.statement_type)
                     if result.status in (ParseStatus.SUCCESS, ParseStatus.PARTIAL):
                         return result
-        
-        # No pattern matched - try fallback parsing
-        return self._fallback_parse(normalized, original)
+        return None
+    
+    _PARENTHETICAL = re.compile(r"^([^,]+?),\s+([^,]+?),\s+(.+)$")
+    
+    def _reduce_parenthetical(self, normalized: str) -> Optional[Tuple[str, str]]:
+        """
+        Remove one comma-delimited subordinate clause inserted between
+        the subject and the main verb (defect P1-B).
+
+        'aspirin, discovered in 1897, is an analgesic' matched no
+        pattern and fell to token guessing. Reducing it to the main
+        clause 'aspirin is an analgesic' lets the established patterns
+        handle it. The removed clause is returned so the caller can
+        surface it as unparsed and unverified; the clause content is
+        never silently accepted.
+        """
+        m = self._PARENTHETICAL.match(normalized)
+        if not m:
+            return None
+        reduced = re.sub(r'\s+', ' ', f"{m.group(1)} {m.group(3)}").strip()
+        return reduced, m.group(2)
+    
+    def _detect_entity_candidates(self, original: str, subjects: List[str]) -> List[str]:
+        """
+        Detect capitalised entity candidates the parser did not extract
+        (defect P1-C).
+
+        Embedded entities in non-subject positions (for example
+        'Sherlock Holmes' in 'Aspirin was not invented by Sherlock
+        Holmes.') were never checked and the pipeline passed silently.
+        This detector surfaces them so the pipeline can flag what was
+        NOT verified. It does not attempt multi-entity claim extraction;
+        that remains the CONTRIBUTING-flagged research problem.
+        """
+        runs = re.findall(r"\b[A-Z][A-Za-z0-9'\-]*(?:\s+[A-Z][A-Za-z0-9'\-]*)*", original)
+        subjects_lc = [s.lower() for s in subjects]
+        candidates: List[str] = []
+        for run in runs:
+            words = run.split()
+            # Drop leading words capitalised for orthographic reasons only.
+            while words and words[0].lower() in self._CANDIDATE_STOPWORDS:
+                words = words[1:]
+            if not words:
+                continue
+            candidate = ' '.join(words)
+            candidate_lc = candidate.lower()
+            if candidate_lc in self._CANDIDATE_STOPWORDS:
+                continue
+            # Already extracted as, or contained within, a subject.
+            if any(candidate_lc == s or candidate_lc in s for s in subjects_lc):
+                continue
+            if candidate not in candidates:
+                candidates.append(candidate)
+        return candidates
+    
+    def _flag_descriptive_subjects(self, original: str, subjects: List[str]) -> List[str]:
+        """
+        Flag subjects that are descriptive noun phrases rather than
+        entity constants (defect P1-D).
+
+        'The capital of France is Paris.' extracts the descriptive
+        phrase 'capital of france' as its subject. A corpus lookup on
+        that phrase is meaningless, so the refusal must state the v0.1
+        parser scope reason rather than read as a plain corpus miss.
+
+        Heuristic: the phrase contains ' of ' and, in the original text,
+        at least one non-particle word is lower case. This rules out
+        proper compounds such as 'United States of America'. Definite
+        description treatment in NTP is itself PRELIMINARY (not yet
+        validated from source), so refusing here is the theoretically
+        safe v0.1 behaviour.
+        """
+        particles = {"of", "the", "a", "an"}
+        flagged: List[str] = []
+        for subject in subjects:
+            if " of " not in f" {subject} ":
+                continue
+            pattern = r"\b" + r"\s+".join(re.escape(w) for w in subject.split()) + r"\b"
+            match = re.search(pattern, original, re.IGNORECASE)
+            span_words = match.group(0).split() if match else subject.split()
+            content_words = [w for w in span_words if w.lower() not in particles]
+            if any(w[:1].islower() for w in content_words):
+                flagged.append(subject)
+        return flagged
     
     # =========================================================================
     # Extraction Methods
@@ -643,21 +800,24 @@ class FormulaParser:
         if len(words) >= 2:
             # Guess: first word(s) are subject, rest is predicate
             # This is very approximate
-            subject = words[0]
+            # Normalise the subject token so trailing punctuation is not
+            # captured into it (defect P1-A).
+            subject = self._clean_subject_token(words[0])
             predicate = '_'.join(words[1:])
             
-            formula = Predicate(self._to_predicate_name(predicate), [subject])
-            
-            return ParseResult(
-                status=ParseStatus.PARTIAL,
-                formula=formula,
-                statement_type=StatementType.UNKNOWN,
-                original_text=original,
-                subjects=[subject],
-                predicates=[predicate],
-                confidence=0.3,
-                warnings=["No pattern matched; using fallback parsing"]
-            )
+            if subject:
+                formula = Predicate(self._to_predicate_name(predicate), [subject])
+                
+                return ParseResult(
+                    status=ParseStatus.PARTIAL,
+                    formula=formula,
+                    statement_type=StatementType.UNKNOWN,
+                    original_text=original,
+                    subjects=[subject],
+                    predicates=[predicate],
+                    confidence=0.3,
+                    warnings=["No pattern matched; using fallback parsing"]
+                )
         
         return ParseResult(
             status=ParseStatus.FAILED,
