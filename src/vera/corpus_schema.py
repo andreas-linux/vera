@@ -26,6 +26,11 @@ Migration history
 
    and ``back_reference``: where the source was found (an article, say).
    A back-reference is never evidence in its own right.
+3. ``candidates``: names that something suggests may be entities (a row in
+   a usage register, a citation whose link reaches only a front page) but
+   that no resolvable source yet backs. A candidate is never an existence
+   claim; ``check_existence`` does not read this table. It is promoted to
+   an entity when evidence arrives, or rejected.
 
 Licence: GPL-3.0-or-later
 """
@@ -156,7 +161,27 @@ CREATE TABLE IF NOT EXISTS identity_relations (
 CREATE INDEX IF NOT EXISTS idx_identity_pair ON identity_relations(entity_a_id, entity_b_id);
 """
 
-MIGRATIONS: List[str] = [_MIGRATION_1, _MIGRATION_2]
+_MIGRATION_3 = """
+CREATE TABLE IF NOT EXISTS candidates (
+    candidate_id    TEXT PRIMARY KEY,
+    name            TEXT NOT NULL,
+    type_hint       TEXT,
+    origin          TEXT NOT NULL,
+    back_reference  TEXT,
+    raw             TEXT,
+    status          TEXT NOT NULL DEFAULT 'open'
+                    CHECK (status IN ('open', 'promoted', 'rejected')),
+    entity_id       TEXT REFERENCES entities(entity_id),
+    note            TEXT,
+    created_at      TEXT NOT NULL,
+    UNIQUE (name COLLATE NOCASE, origin, back_reference)
+);
+CREATE INDEX IF NOT EXISTS idx_candidates_name ON candidates(name COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_candidates_status ON candidates(status);
+CREATE INDEX IF NOT EXISTS idx_provenance_url ON provenance(source_url);
+"""
+
+MIGRATIONS: List[str] = [_MIGRATION_1, _MIGRATION_2, _MIGRATION_3]
 
 SCHEMA_VERSION = len(MIGRATIONS)
 

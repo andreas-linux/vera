@@ -131,3 +131,34 @@ def test_require_resolvable_blocks_named_only(tmp_path, capsys):
     assert "held: --require-resolvable" in capsys.readouterr().out
     assert main(["--db", db, "check", "Wainuiomata is a valley.", "--require-resolvable"]) \
         == EXIT_ALLOWED
+
+
+def test_import_commands(tmp_path, capsys):
+    from tests.test_importers import ARTICLE, REGISTER
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "Cyber_Sunday_X_2026-06-07.md").write_text(ARTICLE, encoding="utf-8")
+    (tmp_path / "src" / "draft.md").write_text('[1] Z. "Z." 2026. https://z.example/z', encoding="utf-8")
+    reg = tmp_path / "reg.md"
+    reg.write_text(REGISTER, encoding="utf-8")
+    db = str(tmp_path / "c.db")
+    main(["--db", db, "corpus", "init"])
+    rep = tmp_path / "rep.json"
+    assert main(["--db", db, "import", "citations", str(tmp_path / "src"),
+                 "--include", r"_20\d\d-\d\d-\d\d\.md$", "--report", str(rep)]) == 0
+    d = json.loads(rep.read_text())
+    assert d["files"] == 1 and d["parsed"] == 4 and len(d["refusals"]) == 3
+    assert all({"reason", "file", "line", "text"} <= r.keys() for r in d["refusals"])
+    assert main(["--db", db, "import", "table", str(reg), "--name-column", "Reference",
+                 "--origin", "register_reference"]) == 0
+    assert main(["--db", db, "import", "table", str(reg), "--name-column", "Nope",
+                 "--origin", "x"]) == 1
+    capsys.readouterr()
+    main(["--db", db, "candidates", "list", "--status", "promoted", "--json"])
+    assert [c["name"] for c in json.loads(capsys.readouterr().out)] == ["Kordia"]
+
+
+def test_import_needs_matching_files(tmp_path):
+    db = str(tmp_path / "c.db")
+    main(["--db", db, "corpus", "init"])
+    with pytest.raises(SystemExit, match="no Markdown files matched"):
+        main(["--db", db, "import", "citations", str(tmp_path), "--include", "nothing"])

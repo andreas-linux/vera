@@ -206,7 +206,7 @@ def test_v01_file_is_upgraded_in_place(tmp_path):
     db = tmp_path / "old.db"
     _v01_file(db)
     svc = EVerificationService(str(db), seed=False)
-    assert svc.migrations_applied == [2]
+    assert svc.migrations_applied == list(range(2, SCHEMA_VERSION + 1))
     r = svc.check_existence("ASA")
     assert r.existence_status is ExistenceStatus.EXISTS
     assert r.provenance.provenance_kind == "resolvable"
@@ -235,7 +235,7 @@ def test_v01_row_with_empty_url_becomes_named(tmp_path):
 def test_reopen_applies_nothing(tmp_path):
     db = str(tmp_path / "c.db")
     first = EVerificationService(db, seed=False)
-    assert first.migrations_applied == [1, 2]
+    assert first.migrations_applied == list(range(1, SCHEMA_VERSION + 1))
     first.close()
     second = EVerificationService(db, seed=False)
     assert second.migrations_applied == []
