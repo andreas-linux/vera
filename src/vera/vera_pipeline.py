@@ -31,7 +31,7 @@ import json
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .krampitz_analyzer import KrampitzAnalyzer, Characteristic
 from .formula_parser import FormulaParser, ParseStatus
@@ -61,7 +61,7 @@ class AuditStep:
     input_value: str
     output_value: str
     rule_applied: Optional[str] = None
-    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
 @dataclass
@@ -185,10 +185,10 @@ class VERAPipeline:
         response.print_audit_trail()
     """
 
-    def __init__(self, db_path: str = ":memory:"):
+    def __init__(self, db_path: str = ":memory:", seed: bool = True):
         self.parser = FormulaParser()
         self.krampitz = KrampitzAnalyzer()
-        self.e_service = EVerificationService(db_path=db_path)
+        self.e_service = EVerificationService(db_path=db_path, seed=seed)
         self.d_service = DServiceStub()
 
     def run(self, query: str) -> VerifiedResponse:
@@ -209,7 +209,7 @@ class VERAPipeline:
             VerifiedResponse with outcome and complete audit trail.
         """
         run_id = str(uuid.uuid4())[:8]
-        start = datetime.utcnow()
+        start = datetime.now(timezone.utc)
         audit: List[AuditStep] = []
         step = 0
 
@@ -302,7 +302,7 @@ class VERAPipeline:
                     f" NOTE: embedded entity candidate(s) detected and NOT verified: "
                     f"{candidates}."
                 )
-            elapsed = (datetime.utcnow() - start).total_seconds() * 1000
+            elapsed = (datetime.now(timezone.utc) - start).total_seconds() * 1000
             return VerifiedResponse(
                 run_id=run_id,
                 query=query,
@@ -350,7 +350,7 @@ class VERAPipeline:
         # Step 5: Determine final outcome
         # ----------------------------------------------------------------
         step += 1
-        elapsed = (datetime.utcnow() - start).total_seconds() * 1000
+        elapsed = (datetime.now(timezone.utc) - start).total_seconds() * 1000
         error_code = None
 
         if nonexistent:
@@ -472,7 +472,7 @@ class VERAPipeline:
         error_code: str,
         message: str,
     ) -> VerifiedResponse:
-        elapsed = (datetime.utcnow() - start).total_seconds() * 1000
+        elapsed = (datetime.now(timezone.utc) - start).total_seconds() * 1000
         return VerifiedResponse(
             run_id=run_id,
             query=query,
