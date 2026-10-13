@@ -6,7 +6,7 @@ V.E.R.A. command line
     vera check "Zarkonite is a rare mineral." --json
     vera --db corpus.db corpus init
     vera --db corpus.db corpus add "Wainuiomata" --type PLACE --status EXISTS \\
-         --url https://www.wikidata.org/wiki/Q2004627
+         --url https://en.wikipedia.org/wiki/Wainuiomata
     vera --db corpus.db corpus add "DPMC" --type ORGANISATION --status EXISTS \\
          --named-source "DPMC Critical Infrastructure Consultation" --source-date 2026-02
     vera --db corpus.db corpus lookup DPMC

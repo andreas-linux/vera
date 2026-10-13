@@ -245,7 +245,7 @@ def test_corpus_persists_across_opens(tmp_path):
     db = str(tmp_path / "c.db")
     svc = EVerificationService(db, seed=False)
     _add(svc, "Wainuiomata", EntityType.PLACE, ExistenceStatus.EXISTS,
-         "https://www.wikidata.org/wiki/Q2004627")
+         "https://en.wikipedia.org/wiki/Wainuiomata")
     svc.close()
     assert EVerificationService(db, seed=False).check_existence("Wainuiomata").existence_status \
         is ExistenceStatus.EXISTS

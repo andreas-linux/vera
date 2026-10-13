@@ -10,7 +10,7 @@
 >
 > ```
 > vera --db corpus.db corpus init
-> vera --db corpus.db corpus add "Wainuiomata" --type PLACE --status EXISTS --url https://www.wikidata.org/wiki/Q2004627
+> vera --db corpus.db corpus add "Wainuiomata" --type PLACE --status EXISTS --url https://en.wikipedia.org/wiki/Wainuiomata
 > vera --db corpus.db check "Wainuiomata is a valley."
 > ```
 >
