@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vera-ntp"
-version = "0.1.0"
+dynamic = ["version"]
 description = "V.E.R.A. - Verified Existence and Reason Architecture: AI Hallucination Prevention using Non-Traditional Predication Theory"
 readme = "README.md"
 license = {text = "GPL-3.0-or-later"}
 requires-python = ">=3.10"
 authors = [
-    {name = "Andreas Hamberger", email = "andreas@vera-project.org"},
+    {name = "Andreas Hamberger", email = "andreas@thehambergerreport.com"},
 ]
 maintainers = [
     {name = "V.E.R.A. Open Source Initiative"},
@@ -37,6 +37,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
@@ -44,6 +45,9 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
+test = [
+    "pytest>=7.4.0",
+]
 dev = [
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",
@@ -85,10 +89,15 @@ vera = "vera.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.dynamic]
+version = {attr = "vera.__version__"}
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
-addopts = "-v --cov=vera --cov-report=term-missing"
+# Coverage is opt-in (pip install -e .[dev]; pytest --cov=vera) so a plain
+# `pytest` works with only the test extra installed.
+addopts = "-ra"
 
 [tool.black]
 line-length = 100

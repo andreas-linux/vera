@@ -11,24 +11,65 @@ developed by Professor Horst Wessel, Humboldt University Berlin.
 Source: Wessel, H. (1992). 'Existenz, Ununterscheidbarkeit, Identität.'
         Wissenschaftliche Zeitschrift der Humboldt-Universität zu Berlin.
 
-Version: 0.1.0
+Version: 0.2.0.dev0
 Licence: GPL-3.0
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0.dev0"
 __author__ = "V.E.R.A. Open Source Initiative"
 __licence__ = "GPL-3.0"
 
-from .krampitz_analyzer import KrampitzAnalyzer, Characteristic
-from .e_verification_service import EVerificationService, ExistenceStatus, ExistenceResult
+from .krampitz_analyzer import (
+    KrampitzAnalyzer,
+    Characteristic,
+    AnalysisResult,
+    Formula,
+    Predicate,
+    Negation,
+    InnerNegation,
+    Conjunction,
+    Disjunction,
+    Implication,
+    Biconditional,
+    Universal,
+    Existential,
+)
+from .e_verification_service import (
+    EVerificationService,
+    EntityType,
+    ExistenceResult,
+    ExistenceStatus,
+    IdentityRelationType,
+    IdentityResult,
+    Provenance,
+    ProvenanceKind,
+)
+from .corpus_schema import SCHEMA_VERSION
 from .vera_pipeline import VERAPipeline, VerificationOutcome, VerifiedResponse
 
 __all__ = [
     "KrampitzAnalyzer",
     "Characteristic",
+    "AnalysisResult",
+    "Formula",
+    "Predicate",
+    "Negation",
+    "InnerNegation",
+    "Conjunction",
+    "Disjunction",
+    "Implication",
+    "Biconditional",
+    "Universal",
+    "Existential",
     "EVerificationService",
+    "EntityType",
     "ExistenceStatus",
     "ExistenceResult",
+    "IdentityRelationType",
+    "IdentityResult",
+    "Provenance",
+    "ProvenanceKind",
+    "SCHEMA_VERSION",
     "VERAPipeline",
     "VerificationOutcome",
     "VerifiedResponse",

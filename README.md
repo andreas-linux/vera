@@ -1,3 +1,21 @@
+> **Install and run**
+>
+> ```
+> pip install git+https://github.com/andreas-linux/vera
+> vera check "Aspirin is an analgesic."          # ALLOWED, exit 0
+> vera check "Zarkonite is a rare mineral."      # BLOCKED, exit 1
+> ```
+>
+> Without `--db`, V.E.R.A. uses a small built-in demonstration corpus and says so. To build your own:
+>
+> ```
+> vera --db corpus.db corpus init
+> vera --db corpus.db corpus add "Wainuiomata" --type PLACE --status EXISTS --url https://en.wikipedia.org/wiki/Wainuiomata
+> vera --db corpus.db check "Wainuiomata is a valley."
+> ```
+>
+> `vera check` exits 0 when a statement is allowed, 1 when it is blocked, and 2 when it cannot be evaluated. Run `vera --help` for the rest, and `pip install ".[test]" && pytest` for the tests.
+
 By Andreas Hamberger, M.A. Phil in Logic (Humboldt University). 
 
 30 January 2026
