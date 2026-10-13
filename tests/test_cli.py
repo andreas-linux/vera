@@ -91,3 +91,74 @@ def test_stats_json_names_provenance_split(tmp_path, capsys):
     main(["--db", db, "corpus", "stats", "--json"])
     stats = json.loads(capsys.readouterr().out)
     assert {"provenance_named", "provenance_resolvable", "schema_version"} <= stats.keys()
+
+
+def _named_corpus(tmp_path):
+    db = str(tmp_path / "n.db")
+    main(["--db", db, "corpus", "init"])
+    main(["--db", db, "corpus", "add", "DPMC", "--type", "ORGANISATION", "--status", "EXISTS",
+          "--named-source", "DPMC Critical Infrastructure Consultation"])
+    main(["--db", db, "corpus", "add", "Wainuiomata", "--type", "PLACE", "--status", "EXISTS",
+          "--url", "https://en.wikipedia.org/wiki/Wainuiomata"])
+    return db
+
+
+def test_named_evidence_is_not_called_confirmed(tmp_path, capsys):
+    db = _named_corpus(tmp_path)
+    capsys.readouterr()
+    assert main(["--db", db, "check", "DPMC is a department.", "--json"]) == EXIT_ALLOWED
+    d = json.loads(capsys.readouterr().out)
+    assert d["outcome"] == "VERIFIED"
+    assert d["evidence_basis"] == "named"
+    assert d["named_only_subjects"] == ["DPMC"]
+    assert "confirmed to exist" not in d["summary"]
+    assert "attested" in d["summary"]
+
+
+def test_resolvable_evidence_keeps_confirmed_wording(tmp_path, capsys):
+    db = _named_corpus(tmp_path)
+    capsys.readouterr()
+    main(["--db", db, "check", "Wainuiomata is a valley.", "--json"])
+    d = json.loads(capsys.readouterr().out)
+    assert d["evidence_basis"] == "resolvable"
+    assert "confirmed to exist" in d["summary"]
+
+
+def test_require_resolvable_blocks_named_only(tmp_path, capsys):
+    db = _named_corpus(tmp_path)
+    assert main(["--db", db, "check", "DPMC is a department.", "--require-resolvable"]) \
+        == EXIT_BLOCKED
+    assert "held: --require-resolvable" in capsys.readouterr().out
+    assert main(["--db", db, "check", "Wainuiomata is a valley.", "--require-resolvable"]) \
+        == EXIT_ALLOWED
+
+
+def test_import_commands(tmp_path, capsys):
+    from tests.test_importers import ARTICLE, REGISTER
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "Cyber_Sunday_X_2026-06-07.md").write_text(ARTICLE, encoding="utf-8")
+    (tmp_path / "src" / "draft.md").write_text('[1] Z. "Z." 2026. https://z.example/z', encoding="utf-8")
+    reg = tmp_path / "reg.md"
+    reg.write_text(REGISTER, encoding="utf-8")
+    db = str(tmp_path / "c.db")
+    main(["--db", db, "corpus", "init"])
+    rep = tmp_path / "rep.json"
+    assert main(["--db", db, "import", "citations", str(tmp_path / "src"),
+                 "--include", r"_20\d\d-\d\d-\d\d\.md$", "--report", str(rep)]) == 0
+    d = json.loads(rep.read_text())
+    assert d["files"] == 1 and d["parsed"] == 4 and len(d["refusals"]) == 3
+    assert all({"reason", "file", "line", "text"} <= r.keys() for r in d["refusals"])
+    assert main(["--db", db, "import", "table", str(reg), "--name-column", "Reference",
+                 "--origin", "register_reference"]) == 0
+    assert main(["--db", db, "import", "table", str(reg), "--name-column", "Nope",
+                 "--origin", "x"]) == 1
+    capsys.readouterr()
+    main(["--db", db, "candidates", "list", "--status", "promoted", "--json"])
+    assert [c["name"] for c in json.loads(capsys.readouterr().out)] == ["Kordia"]
+
+
+def test_import_needs_matching_files(tmp_path):
+    db = str(tmp_path / "c.db")
+    main(["--db", db, "corpus", "init"])
+    with pytest.raises(SystemExit, match="no Markdown files matched"):
+        main(["--db", db, "import", "citations", str(tmp_path), "--include", "nothing"])

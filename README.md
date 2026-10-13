@@ -14,7 +14,17 @@
 > vera --db corpus.db check "Wainuiomata is a valley."
 > ```
 >
-> `vera check` exits 0 when a statement is allowed, 1 when it is blocked, and 2 when it cannot be evaluated. Run `vera --help` for the rest, and `pip install ".[test]" && pytest` for the tests.
+> `vera check` exits 0 when a statement is allowed, 1 when it is blocked, and 2 when it cannot be evaluated. Add `--require-resolvable` to block anything resting on a source identified only by name.
+>
+> To build a corpus from the numbered references in your own writing (`[N] Publisher. "Title." Date. URL`), with your own publications excluded as evidence:
+>
+> ```
+> vera --db corpus.db import citations articles/ --self "your name" --report import.json
+> ```
+>
+> To let an MCP client such as Claude consult the corpus: `pip install "vera-ntp[mcp]"`, then run `vera-mcp --db corpus.db`.
+>
+> Run `vera --help` for the rest, and `pip install ".[test]" && pytest` for the tests.
 
 By Andreas Hamberger, M.A. Phil in Logic (Humboldt University). 
 

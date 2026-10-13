@@ -29,6 +29,9 @@ Exit codes for ``vera check``
 
 Not evaluated is non-zero on purpose: a gate that cannot run must not pass.
 
+``--require-resolvable`` also blocks a VERIFIED result whose evidence includes
+a named source (identified by name, not re-readable). Off by default.
+
 Licence: GPL-3.0-or-later
 """
 
@@ -48,6 +51,7 @@ from .e_verification_service import (
     ExistenceStatus,
     ProvenanceKind,
 )
+from .importers import import_citations, import_table_candidates
 from .vera_pipeline import VERAPipeline, VerificationOutcome
 
 EXIT_ALLOWED, EXIT_BLOCKED, EXIT_NOT_EVALUATED = 0, 1, 2
@@ -103,19 +107,30 @@ def cmd_check(args) -> int:
             code = EXIT_BLOCKED
         else:
             code = EXIT_NOT_EVALUATED
+        held_on_named = (
+            args.require_resolvable
+            and r.outcome is VerificationOutcome.VERIFIED
+            and r.evidence_basis != "resolvable"
+        )
+        if held_on_named:
+            code = EXIT_BLOCKED
 
         if args.json:
             d = r.to_dict()
             if not args.audit:
                 d.pop("audit_trail", None)
             d["exit_code"] = code
+            d["held_on_named_evidence"] = bool(held_on_named)
             print(json.dumps(d, indent=2, ensure_ascii=False))
         else:
             verdict = {EXIT_ALLOWED: "ALLOWED", EXIT_BLOCKED: "BLOCKED",
                        EXIT_NOT_EVALUATED: "NOT EVALUATED"}[code]
-            print(f"{verdict}  {r.outcome.value}")
+            print(f"{verdict}  {r.outcome.value}"
+                  + ("  (held: --require-resolvable)" if held_on_named else ""))
             print(f"  Statement:      {r.query}")
             print(f"  Characteristic: {r.characteristic or 'n/a'}")
+            if r.evidence_basis:
+                print(f"  Evidence:       {r.evidence_basis}")
             for er in r.existence_results:
                 src = ""
                 if er.provenance:
@@ -213,6 +228,113 @@ def cmd_corpus_add(args) -> int:
     return 0
 
 
+def _collect_markdown(paths: List[str], include: Optional[str], exclude: Optional[str]) -> List[Path]:
+    import re
+    inc = re.compile(include) if include else None
+    exc = re.compile(exclude) if exclude else None
+    out: List[Path] = []
+    for raw in paths:
+        p = Path(raw)
+        if not p.exists():
+            raise SystemExit(f"vera: no such file or directory: {raw}")
+        files = [p] if p.is_file() else sorted(p.rglob("*.md"))
+        for f in files:
+            s = f.as_posix()
+            if inc and not inc.search(s):
+                continue
+            if exc and exc.search(s):
+                continue
+            out.append(f)
+    return out
+
+
+def _open_file_corpus(args, what: str) -> EVerificationService:
+    path = _require_db(args, what)
+    if not Path(path).exists():
+        raise SystemExit(f"vera: no corpus at {path}; create one with `vera --db {path} corpus init`")
+    return EVerificationService(path, seed=False)
+
+
+def _write_report(path: Optional[str], data: dict) -> None:
+    if path:
+        Path(path).write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def cmd_import_citations(args) -> int:
+    files = _collect_markdown(args.paths, args.include, args.exclude)
+    if not files:
+        raise SystemExit("vera: no Markdown files matched; nothing imported")
+    svc = _open_file_corpus(args, "import citations")
+    try:
+        rep = import_citations(svc, files, self_patterns=args.self_pattern)
+        promoted = svc.match_candidates()
+        stats = svc.get_corpus_stats()
+    finally:
+        svc.close()
+    d = rep.to_dict()
+    d["candidates_promoted_now"] = promoted
+    d["corpus"] = stats
+    _write_report(args.report, d)
+    if args.json:
+        print(json.dumps(d, indent=2, ensure_ascii=False))
+    else:
+        print(f"files {d['files']}, numbered lines {d['numbered_lines']}, "
+              f"parsed {d['parsed']} ({d['deep_links']} deep, {d['root_links']} front-page only), "
+              f"refused {d['refused']}")
+        for reason, n in d["refused_by_reason"].items():
+            print(f"  refused  {n:5}  {reason}")
+        if d["multi_publisher_strings"]:
+            print(f"  {d['multi_publisher_strings']} publisher strings named several bodies; "
+                  f"no publisher entity made for those")
+        print(f"created {d['publishers_created']} publishers, {d['documents_created']} documents; "
+              f"{d['provenance_added']} provenance records; {d['candidates_added']} candidates; "
+              f"{promoted} candidates promoted")
+        if args.report:
+            print(f"full report, every refusal with file and line: {args.report}")
+    return 0
+
+
+def cmd_import_table(args) -> int:
+    svc = _open_file_corpus(args, "import table")
+    try:
+        rep = import_table_candidates(
+            svc, Path(args.file), args.name_column, args.origin,
+            type_column=args.type_column, ref_column=args.ref_column, split=args.split)
+        promoted = svc.match_candidates()
+    finally:
+        svc.close()
+    d = rep.to_dict()
+    d["candidates_promoted_now"] = promoted
+    _write_report(args.report, d)
+    if rep.tables_matched == 0:
+        print(f"vera: no table in {args.file} has a column named {args.name_column!r}",
+              file=sys.stderr)
+        return 1
+    print(json.dumps(d, indent=2, ensure_ascii=False) if args.json else
+          f"tables {d['tables_matched']}, rows {d['rows_read']}, refused {dict(d['rows_refused'])}, "
+          f"candidates added {d['candidates_added']} (already present {d['candidates_already_present']}), "
+          f"promoted {promoted}")
+    return 0
+
+
+def cmd_candidates_list(args) -> int:
+    svc = _open_file_corpus(args, "candidates list")
+    rows = svc.list_candidates(status=args.status, origin=args.origin, limit=args.limit)
+    svc.close()
+    _print(rows, args.json, "\n".join(
+        f"{r['status']:9} {r['origin']:20} {r['name'][:70]}  <- {r['back_reference'] or ''}"
+        for r in rows) or "none")
+    return 0
+
+
+def cmd_candidates_match(args) -> int:
+    svc = _open_file_corpus(args, "candidates match")
+    n = svc.match_candidates()
+    svc.close()
+    print(f"promoted {n} candidate(s) whose exact name or alias is now in the corpus")
+    return 0
+
+
 def cmd_identity(args) -> int:
     svc = _open_service(args)
     r = svc.resolve_identity(args.a, args.b)
@@ -248,6 +370,9 @@ def build_parser() -> argparse.ArgumentParser:
     c = sub.add_parser("check", parents=[common], help="verify a statement")
     c.add_argument("statement", nargs="+")
     c.add_argument("--audit", action="store_true", help="include the full audit trail")
+    c.add_argument("--require-resolvable", action="store_true",
+                   help="block a VERIFIED result unless every source can be re-read "
+                        "(named-only evidence exits 1)")
     c.set_defaults(func=cmd_check)
 
     i = sub.add_parser("identity", parents=[common], help="identity relation between two names")
@@ -289,6 +414,42 @@ def build_parser() -> argparse.ArgumentParser:
     ca.add_argument("--confidence", type=float, default=0.9)
     ca.add_argument("--reliability", type=float, default=0.85)
     ca.set_defaults(func=cmd_corpus_add)
+
+    imp = sub.add_parser("import", help="build a corpus from your own material")
+    isub = imp.add_subparsers(dest="import_command", required=True)
+
+    ic = isub.add_parser("citations", parents=[common],
+                         help='numbered references: [N] Publisher. "Title." ... URL')
+    ic.add_argument("paths", nargs="+", help="Markdown files or directories (searched for *.md)")
+    ic.add_argument("--include", help="regex a file path must match")
+    ic.add_argument("--exclude", help="regex that drops a file path")
+    ic.add_argument("--report", help="write the full JSON report, every refusal included")
+    ic.add_argument("--self", dest="self_pattern", action="append", default=[], metavar="REGEX",
+                    help="your own name, site or repo; matching citations are refused as "
+                         "self-citations (repeatable)")
+    ic.set_defaults(func=cmd_import_citations)
+
+    it = isub.add_parser("table", parents=[common],
+                         help="a Markdown table column as candidates (never evidence)")
+    it.add_argument("file")
+    it.add_argument("--name-column", required=True)
+    it.add_argument("--origin", required=True, help="label for where these came from")
+    it.add_argument("--type-column")
+    it.add_argument("--ref-column", help="column recorded as the back-reference")
+    it.add_argument("--split", help="split the name cell on this separator")
+    it.add_argument("--report")
+    it.set_defaults(func=cmd_import_table)
+
+    cand = sub.add_parser("candidates", help="names with no evidence yet")
+    candsub = cand.add_subparsers(dest="candidates_command", required=True)
+    cli_ = candsub.add_parser("list", parents=[common])
+    cli_.add_argument("--status", default="open", choices=["open", "promoted", "rejected"])
+    cli_.add_argument("--origin")
+    cli_.add_argument("--limit", type=int, default=50)
+    cli_.set_defaults(func=cmd_candidates_list)
+    cm = candsub.add_parser("match", parents=[common],
+                            help="promote candidates whose exact name is now an entity")
+    cm.set_defaults(func=cmd_candidates_match)
 
     return p
 

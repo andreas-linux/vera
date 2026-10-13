@@ -61,6 +61,7 @@ class EntityType(Enum):
     EVENT = "EVENT"
     FICTIONAL = "FICTIONAL"       # Known non-existent (fictional entities)
     MYTHOLOGICAL = "MYTHOLOGICAL" # Known non-existent (mythological entities)
+    DOCUMENT = "DOCUMENT"         # A report, paper, statute, article or web page
 
 
 class ProvenanceKind(Enum):
@@ -626,6 +627,8 @@ class EVerificationService:
             "provenance_resolvable": q("SELECT COUNT(*) FROM provenance WHERE provenance_kind = 'resolvable'"),
             "provenance_named": q("SELECT COUNT(*) FROM provenance WHERE provenance_kind = 'named'"),
             "identity_relations": q("SELECT COUNT(*) FROM identity_relations"),
+            "candidates_open": q("SELECT COUNT(*) FROM candidates WHERE status = 'open'"),
+            "candidates_promoted": q("SELECT COUNT(*) FROM candidates WHERE status = 'promoted'"),
             "queries_logged": q("SELECT COUNT(*) FROM audit_log"),
         }
 
@@ -718,6 +721,103 @@ class EVerificationService:
         )
         self._conn.commit()
         return relation_id
+
+    def add_provenance(
+        self,
+        entity_id: str,
+        source_type: str,
+        source_url: Optional[str] = None,
+        reliability_score: float = 0.85,
+        *,
+        provenance_kind: ProvenanceKind = ProvenanceKind.RESOLVABLE,
+        source_title: Optional[str] = None,
+        source_date: Optional[str] = None,
+        back_reference: Optional[str] = None,
+        verification_method: str = "AUTOMATED",
+        evidence_snippet: Optional[str] = None,
+    ) -> Optional[str]:
+        """
+        Attach another piece of evidence to an existing entity.
+
+        Idempotent: the same source URL (or, for a named source, the same
+        title) with the same back-reference is not stored twice; returns
+        None in that case, else the new provenance_id.
+        """
+        kind = ProvenanceKind(provenance_kind)
+        if kind is ProvenanceKind.RESOLVABLE and not (source_url or "").strip():
+            raise ValueError("a resolvable source needs source_url")
+        if kind is ProvenanceKind.NAMED and not (source_title or "").strip():
+            raise ValueError("a named source needs source_title")
+        dup = self._conn.execute(
+            """SELECT 1 FROM provenance WHERE entity_id = ?
+               AND IFNULL(source_url, '') = IFNULL(?, '')
+               AND IFNULL(source_title, '') = IFNULL(?, '')
+               AND IFNULL(back_reference, '') = IFNULL(?, '')""",
+            (entity_id, source_url, source_title, back_reference),
+        ).fetchone()
+        if dup:
+            return None
+        cur = self._conn.cursor()
+        prov_id = self._insert_provenance(
+            cur, entity_id, source_type, source_url, reliability_score, kind=kind.value,
+            source_title=source_title, source_date=source_date, back_reference=back_reference,
+            verification_method=verification_method, evidence_snippet=evidence_snippet,
+        )
+        self._conn.commit()
+        return prov_id
+
+    def find_entity_id(self, name: str) -> Optional[str]:
+        """Entity id for a canonical name or alias, case-insensitive; no audit entry."""
+        row = self._find_entity(name.strip(), True)
+        return row["entity_id"] if row else None
+
+    # -------------------------------------------------------------------------
+    # Candidates: suggested names with no evidence yet. Never existence claims.
+    # -------------------------------------------------------------------------
+
+    def add_candidate(self, name: str, origin: str, *, type_hint: Optional[str] = None,
+                      back_reference: Optional[str] = None, raw: Optional[str] = None,
+                      note: Optional[str] = None) -> bool:
+        """Record a candidate. Returns False if this name, origin and back-reference exist."""
+        cur = self._conn.execute(
+            """INSERT OR IGNORE INTO candidates
+               (candidate_id, name, type_hint, origin, back_reference, raw, note, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (f"cand-{uuid.uuid4().hex[:12]}", name.strip(), type_hint, origin,
+             back_reference, raw, note, self._now()),
+        )
+        self._conn.commit()
+        return cur.rowcount == 1
+
+    def list_candidates(self, status: str = "open", origin: Optional[str] = None,
+                        limit: int = 50) -> List[Dict[str, Any]]:
+        sql = "SELECT * FROM candidates WHERE status = ?"
+        params: List[Any] = [status]
+        if origin:
+            sql += " AND origin = ?"
+            params.append(origin)
+        sql += " ORDER BY name COLLATE NOCASE LIMIT ?"
+        params.append(limit)
+        return [dict(r) for r in self._conn.execute(sql, params).fetchall()]
+
+    def match_candidates(self) -> int:
+        """
+        Mark open candidates whose name now resolves to a corpus entity as
+        promoted, linking the entity. Returns how many were promoted. Matching
+        is by exact canonical name or alias, case-insensitive; nothing fuzzy.
+        """
+        promoted = 0
+        rows = self._conn.execute(
+            "SELECT candidate_id, name FROM candidates WHERE status = 'open'").fetchall()
+        for row in rows:
+            entity = self._find_entity(row["name"], True)
+            if entity:
+                self._conn.execute(
+                    "UPDATE candidates SET status = 'promoted', entity_id = ? WHERE candidate_id = ?",
+                    (entity["entity_id"], row["candidate_id"]))
+                promoted += 1
+        self._conn.commit()
+        return promoted
 
     # -------------------------------------------------------------------------
     # Private Helpers

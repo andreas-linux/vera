@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- A statement resting only on a named source was reported as "confirmed to exist". It now reads "VERIFIED ON NAMED EVIDENCE" and says the existence is attested, not confirmed.
 - `import vera` failed on any installed copy: three modules used bare imports that only resolved from inside `src/vera`. They are relative now.
 - The shipped test file could not be collected (the package did not export `Predicate` and the other formula classes it imports).
 - `pip install` put a `vera` command on the path pointing at a `vera.cli` module that did not exist.
@@ -22,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Version is single-sourced from `vera.__version__` (now `0.2.0.dev0`). Author contact is andreas@thehambergerreport.com.
 
 ### Added
+- `vera import citations`: builds a corpus from numbered references (`[N] Publisher. "Title." Date. URL`). Publisher and document become entities with resolvable provenance; the citing file is the back-reference, never the evidence. Front-page-only links count for the publisher, not the document. Self-citations (`--self`), author-flagged unverified links, lines with no URL or no title are refused with reason, file and line.
+- `vera import table`: a Markdown table column as candidates only; `vera candidates list | match`. Schema migration 3 adds the candidates table.
+- `vera-mcp`: an MCP server (stdio, read-only) with `check_statement`, `check_existence`, `resolve_identity`, `search_corpus` and `corpus_stats`. Works with the MCP SDK 1.x and 2.x; install with the `mcp` extra.
+- `evidence_basis` on every pipeline result (resolvable, named, mixed, none), and `vera check --require-resolvable`.
 - `vera` command line: `check`, `identity`, `corpus init | stats | lookup | search | add`.
 - `resolve_identity`, `search_entities`, `add_property` and `add_identity_relation` on the unified service.
 - CI on Python 3.10 to 3.13, including an install-and-import check from outside the source tree, and a build check.
