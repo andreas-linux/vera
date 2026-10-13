@@ -33,9 +33,9 @@ from enum import Enum
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
-from krampitz_analyzer import KrampitzAnalyzer, Characteristic
-from formula_parser import FormulaParser, ParseStatus
-from e_verification_service import EVerificationService, ExistenceStatus, ExistenceResult
+from .krampitz_analyzer import KrampitzAnalyzer, Characteristic
+from .formula_parser import FormulaParser, ParseStatus
+from .e_verification_service import EVerificationService, ExistenceStatus, ExistenceResult
 
 
 # =============================================================================

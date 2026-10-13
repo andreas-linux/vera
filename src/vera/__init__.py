@@ -19,13 +19,38 @@ __version__ = "0.1.0"
 __author__ = "V.E.R.A. Open Source Initiative"
 __licence__ = "GPL-3.0"
 
-from .krampitz_analyzer import KrampitzAnalyzer, Characteristic
+from .krampitz_analyzer import (
+    KrampitzAnalyzer,
+    Characteristic,
+    AnalysisResult,
+    Formula,
+    Predicate,
+    Negation,
+    InnerNegation,
+    Conjunction,
+    Disjunction,
+    Implication,
+    Biconditional,
+    Universal,
+    Existential,
+)
 from .e_verification_service import EVerificationService, ExistenceStatus, ExistenceResult
 from .vera_pipeline import VERAPipeline, VerificationOutcome, VerifiedResponse
 
 __all__ = [
     "KrampitzAnalyzer",
     "Characteristic",
+    "AnalysisResult",
+    "Formula",
+    "Predicate",
+    "Negation",
+    "InnerNegation",
+    "Conjunction",
+    "Disjunction",
+    "Implication",
+    "Biconditional",
+    "Universal",
+    "Existential",
     "EVerificationService",
     "ExistenceStatus",
     "ExistenceResult",

@@ -18,7 +18,7 @@ Version: 0.1.0
 Date: March 2026
 """
 
-from vera_pipeline import VERAPipeline, VerificationOutcome
+from .vera_pipeline import VERAPipeline, VerificationOutcome
 
 
 def print_banner():

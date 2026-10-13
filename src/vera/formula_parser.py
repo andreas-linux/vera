@@ -37,7 +37,7 @@ from typing import List, Optional, Tuple, Dict, Any, Set
 from enum import Enum, auto
 
 # Import from Krampitz Analyzer
-from krampitz_analyzer import (
+from .krampitz_analyzer import (
     Formula, Predicate, Negation, InnerNegation,
     Conjunction, Disjunction, Implication, Biconditional,
     Universal, Existential, KrampitzAnalyzer, Characteristic
