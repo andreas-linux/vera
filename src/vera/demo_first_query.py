@@ -18,6 +18,7 @@ Version: 0.1.0
 Date: March 2026
 """
 
+from . import __version__
 from .vera_pipeline import VERAPipeline, VerificationOutcome
 
 
@@ -164,7 +165,7 @@ def run_demo():
             print(f"       Expected: {r['expected']}  Got: {r['actual']}")
 
     print()
-    print("  Pipeline verified. V.E.R.A. v0.1.0 is operational.")
+    print(f"  Pipeline verified. V.E.R.A. v{__version__} is operational.")
     print()
     print("  Contribute: https://github.com/andreas-linux/vera/")
     print("  Te Pono Limited -- Wellington, New Zealand")

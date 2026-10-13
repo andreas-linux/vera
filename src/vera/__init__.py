@@ -11,11 +11,11 @@ developed by Professor Horst Wessel, Humboldt University Berlin.
 Source: Wessel, H. (1992). 'Existenz, Ununterscheidbarkeit, Identität.'
         Wissenschaftliche Zeitschrift der Humboldt-Universität zu Berlin.
 
-Version: 0.1.0
+Version: 0.2.0.dev0
 Licence: GPL-3.0
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0.dev0"
 __author__ = "V.E.R.A. Open Source Initiative"
 __licence__ = "GPL-3.0"
 
