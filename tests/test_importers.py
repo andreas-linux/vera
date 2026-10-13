@@ -170,3 +170,41 @@ def test_table_candidates(svc, tmp_path, article):
     assert svc.match_candidates() == 1
     promoted = svc.list_candidates(status="promoted")
     assert [c["name"] for c in promoted] == ["Kordia"]
+
+
+@pytest.mark.parametrize("line,pubs,title,date", [
+    ('[7] Australian Parliament. (2022, November). *Privacy Legislation Amendment Act 2022*. '
+     'Parliament of Australia. https://www.legislation.gov.au/C2022A00083',
+     ["Australian Parliament"], "Privacy Legislation Amendment Act 2022", "2022"),
+    ('[3] IONIX Threat Center, "CVE-2026-64849, Unauthenticated SSRF". '
+     'https://www.ionix.io/threat-center/cve-2026-64849/',
+     ["IONIX Threat Center"], "CVE-2026-64849, Unauthenticated SSRF", None),
+    ('[2] IAPP / Legal Nodes. "AI governance guide." 3 May 2026. https://iapp.org/x',
+     ["IAPP", "Legal Nodes"], "AI governance guide", "3 May 2026"),
+])
+def test_other_citation_forms(line, pubs, title, date):
+    c, r = parse_citation(line)
+    assert r is None, r
+    assert (c.publishers, c.title, c.date) == (pubs, title, date)
+
+
+def test_self_citation_is_refused():
+    import re
+    selfs = [re.compile(r"hamberger", re.I), re.compile(r"github\.com/andreas-linux", re.I)]
+    for line in ('[3] Hamberger, A. "V.E.R.A. benchmarks." 2026. https://github.com/x/vera',
+                 '[1] Te Pono. "Repo." 2026. https://github.com/andreas-linux/vera/'):
+        c, r = parse_citation(line, self_patterns=selfs)
+        assert c is None and r.reason == "self-citation"
+    c, r = parse_citation('[1] Kordia. "Report." 2026. https://kordia.co.nz/r', self_patterns=selfs)
+    assert r is None
+
+
+def test_multi_publisher_string_creates_no_publisher(svc, tmp_path):
+    p = tmp_path / "a.md"
+    p.write_text('[1] CISA, NSA, and NCSC-UK. "Joint guidance." 2026. https://cisa.gov/joint\n'
+                 '[2] Smith, J. "Paper." 2026. https://journal.example/smith\n', encoding="utf-8")
+    rep = import_citations(svc, [p])
+    assert rep.multi_publisher_strings == 1
+    assert svc.find_entity_id("CISA, NSA, and NCSC-UK") is None
+    assert svc.find_entity_id("Joint guidance")          # the document still stands
+    assert svc.find_entity_id("Smith, J")                # one comma names one author

@@ -266,7 +266,7 @@ def cmd_import_citations(args) -> int:
         raise SystemExit("vera: no Markdown files matched; nothing imported")
     svc = _open_file_corpus(args, "import citations")
     try:
-        rep = import_citations(svc, files)
+        rep = import_citations(svc, files, self_patterns=args.self_pattern)
         promoted = svc.match_candidates()
         stats = svc.get_corpus_stats()
     finally:
@@ -283,6 +283,9 @@ def cmd_import_citations(args) -> int:
               f"refused {d['refused']}")
         for reason, n in d["refused_by_reason"].items():
             print(f"  refused  {n:5}  {reason}")
+        if d["multi_publisher_strings"]:
+            print(f"  {d['multi_publisher_strings']} publisher strings named several bodies; "
+                  f"no publisher entity made for those")
         print(f"created {d['publishers_created']} publishers, {d['documents_created']} documents; "
               f"{d['provenance_added']} provenance records; {d['candidates_added']} candidates; "
               f"{promoted} candidates promoted")
@@ -421,6 +424,9 @@ def build_parser() -> argparse.ArgumentParser:
     ic.add_argument("--include", help="regex a file path must match")
     ic.add_argument("--exclude", help="regex that drops a file path")
     ic.add_argument("--report", help="write the full JSON report, every refusal included")
+    ic.add_argument("--self", dest="self_pattern", action="append", default=[], metavar="REGEX",
+                    help="your own name, site or repo; matching citations are refused as "
+                         "self-citations (repeatable)")
     ic.set_defaults(func=cmd_import_citations)
 
     it = isub.add_parser("table", parents=[common],

@@ -17,7 +17,8 @@ The file that cites a source is never itself the evidence.
   attests the publisher, not the document. The document is recorded as a
   candidate until a deep link backs it.
 * A line carrying ``[verify URL ...]`` (an author's own note that the link was
-  not checked) is refused. So is a line with no URL, no quoted title, or a
+  not checked) is refused, as is a self-citation (see ``self_patterns``).
+  So is a line with no URL, no quoted title, or a
   URL that does not parse. Every refusal is reported with its reason, file
   and line; nothing is guessed.
 
@@ -37,7 +38,7 @@ import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 from urllib.parse import urlsplit
 
 from .e_verification_service import (
@@ -54,7 +55,10 @@ from .e_verification_service import (
 _NUMBERED = re.compile(r"^\s*\[(\d{1,4})\]\s+(.*\S)\s*$")
 _VERIFY_MARKER = re.compile(r"\[\s*verify\s+url", re.I)
 _URL = re.compile(r"https?://[^\s<>\]\"'`]+")
-_QUOTED_TITLE = re.compile(r"^(?P<pub>.+?)\.\s+[\"“](?P<title>[^\"”]{2,400})[\"”]\.?\s*(?P<rest>.*)$")
+_QUOTED_TITLE = re.compile(
+    r"^(?P<pub>.+?)[.,]\s+(?:\((?P<apa>[^)]{2,40})\)\.\s+)?"
+    r"(?:[\"\u201c](?P<title>[^\"\u201d]{2,400})[\"\u201d]|\*(?P<ititle>[^*]{2,400})\*)"
+    r"[.,]?\s*(?P<rest>.*)$")
 _MONTHS = ("January|February|March|April|May|June|July|August|September|October|"
            "November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec")
 _DATE = re.compile(rf"\b(?:\d{{1,2}}\s+(?:{_MONTHS})\s+\d{{4}}|(?:{_MONTHS})\s+\d{{4}}|\d{{4}}-\d{{2}}-\d{{2}})\b")
@@ -99,6 +103,7 @@ class CitationReport:
     documents_created: int = 0
     provenance_added: int = 0
     candidates_added: int = 0
+    multi_publisher_strings: int = 0
 
     def refused_by_reason(self) -> Dict[str, int]:
         return dict(Counter(r.reason for r in self.refused).most_common())
@@ -116,6 +121,7 @@ class CitationReport:
             "documents_created": self.documents_created,
             "provenance_added": self.provenance_added,
             "candidates_added": self.candidates_added,
+            "multi_publisher_strings": self.multi_publisher_strings,
             "refusals": [r.__dict__ for r in self.refused],
         }
 
@@ -129,8 +135,21 @@ def _is_deep(url: str) -> bool:
     return bool(parts.path.strip("/")) or bool(parts.query)
 
 
-def parse_citation(text: str, file: str = "", line: int = 0) -> Tuple[Optional[Citation], Optional[Refusal]]:
-    """Parse one numbered reference line. Exactly one of the pair is not None."""
+def is_multi_publisher(name: str) -> bool:
+    """'CISA, NSA, ASD and NCSC' names several bodies, not one; 'Smith, J' names one."""
+    return name.count(",") >= 2 or bool(re.search(r",\s+(and|with)\b|\(with\b", name))
+
+
+def parse_citation(text: str, file: str = "", line: int = 0,
+                   self_patterns: Sequence["re.Pattern[str]"] = ()
+                   ) -> Tuple[Optional[Citation], Optional[Refusal]]:
+    """
+    Parse one numbered reference line. Exactly one of the pair is not None.
+
+    ``self_patterns`` are regexes for the author's own publications (names or
+    URLs). A citation matching one is refused as a self-citation: an author's
+    own work cannot attest the existence of what that work describes.
+    """
     m = _NUMBERED.match(text)
     if not m:
         return None, Refusal("not a numbered reference", file, line, text.strip())
@@ -150,12 +169,16 @@ def parse_citation(text: str, file: str = "", line: int = 0) -> Tuple[Optional[C
     t = _QUOTED_TITLE.match(body.replace(url, "").strip())
     if not t:
         return None, Refusal("no quoted title", file, line, text.strip())
-    publishers = [p.strip(" .") for p in t.group("pub").split(";") if p.strip(" .")]
+    publishers = [p.strip(" .") for p in re.split(r";|\s/\s", t.group("pub")) if p.strip(" .")]
     if not publishers:
         return None, Refusal("no publisher", file, line, text.strip())
-    date = _DATE.search(t.group("rest"))
+    if self_patterns and any(rx.search(x) for rx in self_patterns for x in publishers + [url]):
+        return None, Refusal("self-citation", file, line, text.strip())
+    title = (t.group("title") or t.group("ititle")).strip(" .")
+    date = (_DATE.search(t.group("rest")) or _DATE.search(t.group("apa") or "")
+            or re.search(r"\b(?:19|20)\d\d\b", t.group("apa") or ""))
     return Citation(
-        file=file, number=number, publishers=publishers, title=t.group("title").strip(" ."),
+        file=file, number=number, publishers=publishers, title=title,
         date=date.group(0) if date else None, url=url, deep=_is_deep(url), raw=text.strip(),
     ), None
 
@@ -202,14 +225,22 @@ def _document_name(svc: EVerificationService, cit: Citation) -> str:
 
 
 def import_citations(svc: EVerificationService, paths: Iterable[Path],
-                     label=lambda p: p.name) -> CitationReport:
-    """Import every numbered reference line in ``paths``. See module docstring."""
+                     label=lambda p: p.name,
+                     self_patterns: Sequence[str] = ()) -> CitationReport:
+    """
+    Import every numbered reference line in ``paths``. See module docstring.
+
+    A publisher string naming several bodies ("CISA, NSA and NCSC") creates no
+    publisher entity, because no single body is named; the document is still
+    imported and keeps the string as its ``publisher`` property.
+    """
+    selfs = [re.compile(p, re.I) for p in self_patterns]
     report = CitationReport()
     for path in paths:
         report.files += 1
         for lineno, text in iter_numbered_lines(path):
             report.numbered_lines += 1
-            cit, refusal = parse_citation(text, label(path), lineno)
+            cit, refusal = parse_citation(text, label(path), lineno, selfs)
             if refusal:
                 report.refused.append(refusal)
                 if refusal.reason == "no URL":
@@ -224,6 +255,9 @@ def import_citations(svc: EVerificationService, paths: Iterable[Path],
             report.parsed += 1
 
             for pub in cit.publishers:
+                if is_multi_publisher(pub):
+                    report.multi_publisher_strings += 1
+                    continue
                 pid = _ensure_entity(svc, pub, EntityType.ORGANISATION, cit, report)
                 if svc.add_provenance(pid, "CITATION", cit.url, 0.85,
                                       source_title=cit.title, source_date=cit.date,
