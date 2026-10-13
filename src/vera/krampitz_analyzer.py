@@ -53,13 +53,13 @@ class FormulaType(Enum):
     """Types of NTP formulas."""
     PREDICATE = auto()      # P(x), Swan(x), etc.
     NEGATION = auto()       # ~A (outer negation)
-    CONJUNCTION = auto()    # A âˆ§ B
-    DISJUNCTION = auto()    # A âˆ¨ B
-    IMPLICATION = auto()    # A âŠƒ B
-    BICONDITIONAL = auto()  # A â‰¡ B
-    UNIVERSAL = auto()      # âˆ€xA
-    EXISTENTIAL = auto()    # âˆƒxA
-    INNER_NEGATION = auto() # Â¬A (inner/contrary negation)
+    CONJUNCTION = auto()    # A ∧ B
+    DISJUNCTION = auto()    # A ∨ B
+    IMPLICATION = auto()    # A ⊃ B
+    BICONDITIONAL = auto()  # A ≡ B
+    UNIVERSAL = auto()      # ∀xA
+    EXISTENTIAL = auto()    # ∃xA
+    INNER_NEGATION = auto() # ¬A (inner/contrary negation)
 
 
 @dataclass
@@ -140,14 +140,14 @@ class Negation(Formula):
 
 @dataclass
 class InnerNegation(Formula):
-    """Inner (contrary) negation: Â¬A"""
+    """Inner (contrary) negation: ¬A"""
     operand: Formula
     
     def formula_type(self) -> FormulaType:
         return FormulaType.INNER_NEGATION
     
     def __str__(self) -> str:
-        return f"Â¬{self.operand}"
+        return f"¬{self.operand}"
     
     def get_subjects(self) -> List[str]:
         return self.operand.get_subjects()
@@ -155,7 +155,7 @@ class InnerNegation(Formula):
 
 @dataclass
 class Conjunction(Formula):
-    """Conjunction: A âˆ§ B"""
+    """Conjunction: A ∧ B"""
     left: Formula
     right: Formula
     
@@ -163,7 +163,7 @@ class Conjunction(Formula):
         return FormulaType.CONJUNCTION
     
     def __str__(self) -> str:
-        return f"({self.left} âˆ§ {self.right})"
+        return f"({self.left} ∧ {self.right})"
     
     def get_subjects(self) -> List[str]:
         return self.left.get_subjects() + self.right.get_subjects()
@@ -171,7 +171,7 @@ class Conjunction(Formula):
 
 @dataclass
 class Disjunction(Formula):
-    """Disjunction: A âˆ¨ B"""
+    """Disjunction: A ∨ B"""
     left: Formula
     right: Formula
     
@@ -179,7 +179,7 @@ class Disjunction(Formula):
         return FormulaType.DISJUNCTION
     
     def __str__(self) -> str:
-        return f"({self.left} âˆ¨ {self.right})"
+        return f"({self.left} ∨ {self.right})"
     
     def get_subjects(self) -> List[str]:
         return self.left.get_subjects() + self.right.get_subjects()
@@ -187,7 +187,7 @@ class Disjunction(Formula):
 
 @dataclass
 class Implication(Formula):
-    """Material implication: A âŠƒ B"""
+    """Material implication: A ⊃ B"""
     antecedent: Formula
     consequent: Formula
     
@@ -195,7 +195,7 @@ class Implication(Formula):
         return FormulaType.IMPLICATION
     
     def __str__(self) -> str:
-        return f"({self.antecedent} âŠƒ {self.consequent})"
+        return f"({self.antecedent} ⊃ {self.consequent})"
     
     def get_subjects(self) -> List[str]:
         return self.antecedent.get_subjects() + self.consequent.get_subjects()
@@ -203,7 +203,7 @@ class Implication(Formula):
 
 @dataclass
 class Biconditional(Formula):
-    """Biconditional: A â‰¡ B"""
+    """Biconditional: A ≡ B"""
     left: Formula
     right: Formula
     
@@ -211,7 +211,7 @@ class Biconditional(Formula):
         return FormulaType.BICONDITIONAL
     
     def __str__(self) -> str:
-        return f"({self.left} â‰¡ {self.right})"
+        return f"({self.left} ≡ {self.right})"
     
     def get_subjects(self) -> List[str]:
         return self.left.get_subjects() + self.right.get_subjects()
@@ -219,7 +219,7 @@ class Biconditional(Formula):
 
 @dataclass
 class Universal(Formula):
-    """Universal quantifier: âˆ€xA"""
+    """Universal quantifier: ∀xA"""
     variable: str
     body: Formula
     
@@ -227,7 +227,7 @@ class Universal(Formula):
         return FormulaType.UNIVERSAL
     
     def __str__(self) -> str:
-        return f"âˆ€{self.variable}({self.body})"
+        return f"∀{self.variable}({self.body})"
     
     def get_subjects(self) -> List[str]:
         return self.body.get_subjects()
@@ -235,7 +235,7 @@ class Universal(Formula):
 
 @dataclass
 class Existential(Formula):
-    """Existential quantifier: âˆƒxA"""
+    """Existential quantifier: ∃xA"""
     variable: str
     body: Formula
     
@@ -243,7 +243,7 @@ class Existential(Formula):
         return FormulaType.EXISTENTIAL
     
     def __str__(self) -> str:
-        return f"âˆƒ{self.variable}({self.body})"
+        return f"∃{self.variable}({self.body})"
     
     def get_subjects(self) -> List[str]:
         return self.body.get_subjects()
@@ -262,12 +262,12 @@ class KrampitzAnalyzer:
     R1. All elementary predicative statements are existentially loaded (e)
     R2. If A is e, then ~A is n
     R3. If A is n, then ~A is e
-    R4. A âˆ¨ B is e âŸº (A is e AND B is e)
-    R5. A âˆ§ B is e âŸº (A is e OR B is e)
-    R6. A âŠƒ B is e âŸº (A is n AND B is e)
-    R7. A â‰¡ B is n âŸº (both A and B are e) OR (both A and B are n)
-    R8. âˆ€iA and âˆƒiA are e âŸº A is e
-    R9. A definition A =Def B must be constructed such that A â‰¡ B is n
+    R4. A ∨ B is e ⟺ (A is e AND B is e)
+    R5. A ∧ B is e ⟺ (A is e OR B is e)
+    R6. A ⊃ B is e ⟺ (A is n AND B is e)
+    R7. A ≡ B is n ⟺ (both A and B are e) OR (both A and B are n)
+    R8. ∀iA and ∃iA are e ⟺ A is e
+    R9. A definition A =Def B must be constructed such that A ≡ B is n
     """
     
     def __init__(self):
@@ -327,8 +327,8 @@ class KrampitzAnalyzer:
             })
             return Characteristic.E
         
-        # Inner negation: Â¬P is also existentially loaded (same as P)
-        # From Wessel: Â¬P(sâ‚,...,sâ‚™) âŠ¢ E(sâ‚) âˆ§ ... âˆ§ E(sâ‚™)
+        # Inner negation: ¬P is also existentially loaded (same as P)
+        # From Wessel: ¬P(s₁,...,sₙ) ⊢ E(s₁) ∧ ... ∧ E(sₙ)
         if ftype == FormulaType.INNER_NEGATION:
             inner = formula.operand
             char = self._compute_characteristic(inner, rule_chain, subformula_analysis)
@@ -452,9 +452,9 @@ class KrampitzAnalyzer:
     
     def validate_definition(self, definiendum: Formula, definiens: Formula) -> Tuple[bool, str]:
         """
-        R9: Validate that a definition satisfies the requirement that A â‰¡ B is n.
+        R9: Validate that a definition satisfies the requirement that A ≡ B is n.
         
-        A definition A =Def B must be constructed such that A â‰¡ B is not
+        A definition A =Def B must be constructed such that A ≡ B is not
         existentially loaded.
         
         Args:
@@ -516,7 +516,7 @@ def run_test_suite():
             "expected": Characteristic.E,
             "description": "~~Swan(x) - double negation returns to e"
         },
-        # KLA-004: R4 - Disjunction both e â†’ e
+        # KLA-004: R4 - Disjunction both e → e
         {
             "id": "KLA-004",
             "rule": "R4",
@@ -525,9 +525,9 @@ def run_test_suite():
                 Predicate("Q", ["x"])
             ),
             "expected": Characteristic.E,
-            "description": "P(x) âˆ¨ Q(x) - both e â†’ e"
+            "description": "P(x) ∨ Q(x) - both e → e"
         },
-        # KLA-005: R4 - Disjunction one n â†’ n
+        # KLA-005: R4 - Disjunction one n → n
         {
             "id": "KLA-005",
             "rule": "R4",
@@ -536,9 +536,9 @@ def run_test_suite():
                 Negation(Predicate("Q", ["x"]))
             ),
             "expected": Characteristic.N,
-            "description": "P(x) âˆ¨ ~Q(x) - one n â†’ n"
+            "description": "P(x) ∨ ~Q(x) - one n → n"
         },
-        # KLA-006: R5 - Conjunction either e â†’ e
+        # KLA-006: R5 - Conjunction either e → e
         {
             "id": "KLA-006",
             "rule": "R5",
@@ -547,9 +547,9 @@ def run_test_suite():
                 Negation(Predicate("Q", ["x"]))
             ),
             "expected": Characteristic.E,
-            "description": "P(x) âˆ§ ~Q(x) - either e â†’ e"
+            "description": "P(x) ∧ ~Q(x) - either e → e"
         },
-        # KLA-007: R6 - Implication (n âŠƒ e) â†’ e
+        # KLA-007: R6 - Implication (n ⊃ e) → e
         {
             "id": "KLA-007",
             "rule": "R6",
@@ -558,9 +558,9 @@ def run_test_suite():
                 Predicate("Q", ["x"])
             ),
             "expected": Characteristic.E,
-            "description": "~P(x) âŠƒ Q(x) - (n âŠƒ e) â†’ e"
+            "description": "~P(x) ⊃ Q(x) - (n ⊃ e) → e"
         },
-        # KLA-008: R7 - Biconditional same char â†’ n
+        # KLA-008: R7 - Biconditional same char → n
         {
             "id": "KLA-008",
             "rule": "R7",
@@ -569,7 +569,7 @@ def run_test_suite():
                 Predicate("Q", ["x"])
             ),
             "expected": Characteristic.N,
-            "description": "P(x) â‰¡ Q(x) - both e â†’ n"
+            "description": "P(x) ≡ Q(x) - both e → n"
         },
         # KLA-009: R8 - Universal quantifier
         {
@@ -577,9 +577,9 @@ def run_test_suite():
             "rule": "R8",
             "formula": Universal("x", Predicate("P", ["x"])),
             "expected": Characteristic.E,
-            "description": "âˆ€x P(x) - same as body"
+            "description": "∀x P(x) - same as body"
         },
-        # Additional test: R6 - Implication (e âŠƒ e) â†’ n
+        # Additional test: R6 - Implication (e ⊃ e) → n
         {
             "id": "KLA-010",
             "rule": "R6",
@@ -588,9 +588,9 @@ def run_test_suite():
                 Predicate("Q", ["x"])
             ),
             "expected": Characteristic.N,
-            "description": "P(x) âŠƒ Q(x) - (e âŠƒ e) â†’ n"
+            "description": "P(x) ⊃ Q(x) - (e ⊃ e) → n"
         },
-        # Additional test: R7 - Biconditional different char â†’ e
+        # Additional test: R7 - Biconditional different char → e
         {
             "id": "KLA-011",
             "rule": "R7",
@@ -599,7 +599,7 @@ def run_test_suite():
                 Negation(Predicate("Q", ["x"]))
             ),
             "expected": Characteristic.E,
-            "description": "P(x) â‰¡ ~Q(x) - e and n â†’ e"
+            "description": "P(x) ≡ ~Q(x) - e and n → e"
         },
         # Complex formula test
         {
@@ -613,7 +613,7 @@ def run_test_suite():
                 Negation(Predicate("Flies", ["x"]))
             ),
             "expected": Characteristic.E,
-            "description": "(Swan(x) âˆ¨ Bird(x)) âˆ§ ~Flies(x) - complex"
+            "description": "(Swan(x) ∨ Bird(x)) ∧ ~Flies(x) - complex"
         },
     ]
     
@@ -622,7 +622,7 @@ def run_test_suite():
     
     for test in test_cases:
         result = analyzer.analyze(test["formula"])
-        status = "âœ“ PASS" if result.characteristic == test["expected"] else "âœ— FAIL"
+        status = "✓ PASS" if result.characteristic == test["expected"] else "✗ FAIL"
         
         if result.characteristic == test["expected"]:
             passed += 1
@@ -633,7 +633,7 @@ def run_test_suite():
         print(f"  Rule: {test['rule']}")
         print(f"  Formula: {test['formula']}")
         print(f"  Expected: {test['expected'].value}, Got: {result.characteristic.value}")
-        print(f"  Rule Chain: {' â†’ '.join(result.rule_chain)}")
+        print(f"  Rule Chain: {' → '.join(result.rule_chain)}")
         print(f"  Requires E! Check: {result.requires_existence_check}")
         print()
     
@@ -655,8 +655,8 @@ def run_test_suite():
         )
     )
     is_valid, explanation = analyzer.validate_definition(*valid_def)
-    print(f"Bachelor(x) =Def Male(x) âˆ§ Unmarried(x)")
-    print(f"  Result: {'âœ“ Valid' if is_valid else 'âœ— Invalid'}")
+    print(f"Bachelor(x) =Def Male(x) ∧ Unmarried(x)")
+    print(f"  Result: {'✓ Valid' if is_valid else '✗ Invalid'}")
     print(f"  {explanation}")
     
     return passed, failed
@@ -698,12 +698,12 @@ class KrampitzAPI:
 
 if __name__ == "__main__":
     print()
-    print("â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—")
-    print("â•‘     V.E.R.A. - Verified Existence and Reason Architecture        â•‘")
-    print("â•‘                  Krampitz Load Analyzer v0.1.0                    â•‘")
-    print("â•‘                                                                    â•‘")
-    print("â•‘  'Truth is a feature, not an option.'                             â•‘")
-    print("â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•")
+    print("╔══════════════════════════════════════════════════════════════════╗")
+    print("║     V.E.R.A. - Verified Existence and Reason Architecture        ║")
+    print("║                  Krampitz Load Analyzer v0.1.0                    ║")
+    print("║                                                                    ║")
+    print("║  'Truth is a feature, not an option.'                             ║")
+    print("╚══════════════════════════════════════════════════════════════════╝")
     print()
     
     # Run test suite
@@ -717,7 +717,7 @@ if __name__ == "__main__":
     analyzer = KrampitzAnalyzer()
     
     # "All swans have white feathers" - a classic NTP example
-    # âˆ€x(Swan(x) âŠƒ WhiteFeathers(x))
+    # ∀x(Swan(x) ⊃ WhiteFeathers(x))
     demo_formula = Universal(
         "x",
         Implication(
@@ -730,7 +730,7 @@ if __name__ == "__main__":
     
     print(f"Formula: {demo_formula}")
     print(f"Characteristic: {result.characteristic.value}")
-    print(f"Rule Chain: {' â†’ '.join(result.rule_chain)}")
+    print(f"Rule Chain: {' → '.join(result.rule_chain)}")
     print(f"Requires E! Verification: {result.requires_existence_check}")
     print()
     print("Full Analysis (JSON):")
