@@ -91,3 +91,43 @@ def test_stats_json_names_provenance_split(tmp_path, capsys):
     main(["--db", db, "corpus", "stats", "--json"])
     stats = json.loads(capsys.readouterr().out)
     assert {"provenance_named", "provenance_resolvable", "schema_version"} <= stats.keys()
+
+
+def _named_corpus(tmp_path):
+    db = str(tmp_path / "n.db")
+    main(["--db", db, "corpus", "init"])
+    main(["--db", db, "corpus", "add", "DPMC", "--type", "ORGANISATION", "--status", "EXISTS",
+          "--named-source", "DPMC Critical Infrastructure Consultation"])
+    main(["--db", db, "corpus", "add", "Wainuiomata", "--type", "PLACE", "--status", "EXISTS",
+          "--url", "https://en.wikipedia.org/wiki/Wainuiomata"])
+    return db
+
+
+def test_named_evidence_is_not_called_confirmed(tmp_path, capsys):
+    db = _named_corpus(tmp_path)
+    capsys.readouterr()
+    assert main(["--db", db, "check", "DPMC is a department.", "--json"]) == EXIT_ALLOWED
+    d = json.loads(capsys.readouterr().out)
+    assert d["outcome"] == "VERIFIED"
+    assert d["evidence_basis"] == "named"
+    assert d["named_only_subjects"] == ["DPMC"]
+    assert "confirmed to exist" not in d["summary"]
+    assert "attested" in d["summary"]
+
+
+def test_resolvable_evidence_keeps_confirmed_wording(tmp_path, capsys):
+    db = _named_corpus(tmp_path)
+    capsys.readouterr()
+    main(["--db", db, "check", "Wainuiomata is a valley.", "--json"])
+    d = json.loads(capsys.readouterr().out)
+    assert d["evidence_basis"] == "resolvable"
+    assert "confirmed to exist" in d["summary"]
+
+
+def test_require_resolvable_blocks_named_only(tmp_path, capsys):
+    db = _named_corpus(tmp_path)
+    assert main(["--db", db, "check", "DPMC is a department.", "--require-resolvable"]) \
+        == EXIT_BLOCKED
+    assert "held: --require-resolvable" in capsys.readouterr().out
+    assert main(["--db", db, "check", "Wainuiomata is a valley.", "--require-resolvable"]) \
+        == EXIT_ALLOWED

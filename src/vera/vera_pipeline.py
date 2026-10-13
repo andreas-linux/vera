@@ -91,6 +91,16 @@ class VerifiedResponse:
     # full-claim verification. Multi-entity claim extraction remains
     # the CONTRIBUTING-flagged research problem.
     unchecked_entity_candidates: List[str] = field(default_factory=list)
+    # What kind of evidence stands behind the existence results:
+    #   "resolvable": every source carries a locator and can be re-read
+    #   "named":      every source is identified by name only
+    #   "mixed":      some of each
+    #   "none":       a corpus entry has no provenance record at all
+    #   None:         no existence check was made (n-type, parse failure)
+    # A VERIFIED outcome on "named" evidence means the corpus records that a
+    # source was cited, not that the claim can be checked against it.
+    evidence_basis: Optional[str] = None
+    named_only_subjects: List[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -100,6 +110,8 @@ class VerifiedResponse:
             "characteristic": self.characteristic,
             "subjects": self.subjects,
             "unchecked_entity_candidates": self.unchecked_entity_candidates,
+            "evidence_basis": self.evidence_basis,
+            "named_only_subjects": self.named_only_subjects,
             "existence_results": [r.to_dict() for r in self.existence_results],
             "audit_trail": [
                 {
@@ -166,6 +178,29 @@ class DServiceStub:
 # =============================================================================
 # VERA Pipeline
 # =============================================================================
+
+def _evidence_basis(results: List[ExistenceResult]) -> tuple:
+    """
+    Classify the evidence behind the corpus hits in ``results``.
+
+    Returns (basis, named_only_subjects). UNKNOWN results carry no evidence
+    and are ignored; if there are no hits at all the basis is None.
+    """
+    hits = [r for r in results if r.existence_status != ExistenceStatus.UNKNOWN]
+    if not hits:
+        return None, []
+    if any(r.provenance is None for r in hits):
+        named_only = [r.canonical_name or r.entity_name for r in hits
+                      if r.provenance is None or r.provenance.provenance_kind == "named"]
+        return "none", named_only
+    named_only = [r.canonical_name or r.entity_name for r in hits
+                  if r.provenance.provenance_kind == "named"]
+    if not named_only:
+        return "resolvable", []
+    if len(named_only) == len(hits):
+        return "named", named_only
+    return "mixed", named_only
+
 
 class VERAPipeline:
     """
@@ -346,6 +381,8 @@ class VERAPipeline:
             elif e_result.existence_status == ExistenceStatus.NOT_EXISTS:
                 nonexistent.append(subject)
 
+        evidence_basis, named_only = _evidence_basis(existence_results)
+
         # ----------------------------------------------------------------
         # Step 5: Determine final outcome
         # ----------------------------------------------------------------
@@ -420,17 +457,31 @@ class VERAPipeline:
         else:
             outcome = VerificationOutcome.VERIFIED
             verified_names = [r.canonical_name for r in existence_results if r.canonical_name]
-            summary = (
-                f"VERIFIED: All subjects {verified_names} confirmed to exist in the E! Corpus. "
-                f"Formula characteristic: {characteristic.value}. "
-                f"Predication is grounded in verified existence."
-            )
+            if evidence_basis == "resolvable":
+                summary = (
+                    f"VERIFIED: All subjects {verified_names} confirmed to exist in the E! Corpus. "
+                    f"Formula characteristic: {characteristic.value}. "
+                    f"Predication is grounded in verified existence."
+                )
+                audit_out = "VERIFIED -- existence confirmed for all subjects (resolvable sources)"
+            else:
+                # Do not say "confirmed" when the evidence cannot be re-read.
+                summary = (
+                    f"VERIFIED ON NAMED EVIDENCE: All subjects {verified_names} are recorded as "
+                    f"existing in the E! Corpus, but {named_only} rest on named sources only: "
+                    f"the source is identified, not re-readable, so existence is attested "
+                    f"rather than confirmed. Formula characteristic: {characteristic.value}."
+                )
+                audit_out = (
+                    f"VERIFIED -- evidence basis '{evidence_basis}'; "
+                    f"named-only subjects: {named_only}"
+                )
             audit.append(AuditStep(
                 step_number=step,
                 layer="VERAPipeline",
                 action="Confirm verification",
                 input_value=f"All subjects: {subjects}",
-                output_value=f"VERIFIED -- existence confirmed for all subjects",
+                output_value=audit_out,
                 rule_applied="NTP: E! precedes M (predication follows verified existence)",
             ))
 
@@ -454,6 +505,8 @@ class VERAPipeline:
             error_code=error_code,
             processing_time_ms=round(elapsed, 2),
             unchecked_entity_candidates=candidates,
+            evidence_basis=evidence_basis,
+            named_only_subjects=named_only,
         )
 
     def close(self) -> None:

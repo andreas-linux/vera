@@ -29,6 +29,9 @@ Exit codes for ``vera check``
 
 Not evaluated is non-zero on purpose: a gate that cannot run must not pass.
 
+``--require-resolvable`` also blocks a VERIFIED result whose evidence includes
+a named source (identified by name, not re-readable). Off by default.
+
 Licence: GPL-3.0-or-later
 """
 
@@ -103,19 +106,30 @@ def cmd_check(args) -> int:
             code = EXIT_BLOCKED
         else:
             code = EXIT_NOT_EVALUATED
+        held_on_named = (
+            args.require_resolvable
+            and r.outcome is VerificationOutcome.VERIFIED
+            and r.evidence_basis != "resolvable"
+        )
+        if held_on_named:
+            code = EXIT_BLOCKED
 
         if args.json:
             d = r.to_dict()
             if not args.audit:
                 d.pop("audit_trail", None)
             d["exit_code"] = code
+            d["held_on_named_evidence"] = bool(held_on_named)
             print(json.dumps(d, indent=2, ensure_ascii=False))
         else:
             verdict = {EXIT_ALLOWED: "ALLOWED", EXIT_BLOCKED: "BLOCKED",
                        EXIT_NOT_EVALUATED: "NOT EVALUATED"}[code]
-            print(f"{verdict}  {r.outcome.value}")
+            print(f"{verdict}  {r.outcome.value}"
+                  + ("  (held: --require-resolvable)" if held_on_named else ""))
             print(f"  Statement:      {r.query}")
             print(f"  Characteristic: {r.characteristic or 'n/a'}")
+            if r.evidence_basis:
+                print(f"  Evidence:       {r.evidence_basis}")
             for er in r.existence_results:
                 src = ""
                 if er.provenance:
@@ -248,6 +262,9 @@ def build_parser() -> argparse.ArgumentParser:
     c = sub.add_parser("check", parents=[common], help="verify a statement")
     c.add_argument("statement", nargs="+")
     c.add_argument("--audit", action="store_true", help="include the full audit trail")
+    c.add_argument("--require-resolvable", action="store_true",
+                   help="block a VERIFIED result unless every source can be re-read "
+                        "(named-only evidence exits 1)")
     c.set_defaults(func=cmd_check)
 
     i = sub.add_parser("identity", parents=[common], help="identity relation between two names")
