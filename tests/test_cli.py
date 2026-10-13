@@ -162,3 +162,48 @@ def test_import_needs_matching_files(tmp_path):
     main(["--db", db, "corpus", "init"])
     with pytest.raises(SystemExit, match="no Markdown files matched"):
         main(["--db", db, "import", "citations", str(tmp_path), "--include", "nothing"])
+
+
+def test_read_only_check_writes_nothing(tmp_path, capsys):
+    import hashlib
+    db = tmp_path / "c.db"
+    main(["--db", str(db), "corpus", "init"])
+    main(["--db", str(db), "corpus", "add", "Wainuiomata", "--type", "PLACE", "--status",
+          "EXISTS", "--url", "https://en.wikipedia.org/wiki/Wainuiomata"])
+    before = hashlib.sha256(db.read_bytes()).hexdigest()
+    db.chmod(0o444)
+    try:
+        assert main(["--db", str(db), "--read-only", "check", "Wainuiomata is a valley."]) \
+            == EXIT_ALLOWED
+        assert main(["--db", str(db), "--read-only", "corpus", "lookup", "Wainuiomata"]) == 0
+    finally:
+        db.chmod(0o644)
+    assert hashlib.sha256(db.read_bytes()).hexdigest() == before
+    assert not (tmp_path / "c.db-journal").exists()
+
+
+def test_unwritable_corpus_is_not_evaluated_not_a_traceback(tmp_path, capsys):
+    import os
+    if os.geteuid() == 0:
+        pytest.skip("root can write a read-only file")
+    db = tmp_path / "c.db"
+    main(["--db", str(db), "corpus", "init"])
+    db.chmod(0o444)
+    try:
+        assert main(["--db", str(db), "check", "Aspirin is an analgesic."]) == EXIT_NOT_EVALUATED
+        assert "--read-only" in capsys.readouterr().err
+    finally:
+        db.chmod(0o644)
+
+
+def test_read_only_refuses_old_schema(tmp_path):
+    import sqlite3
+    from vera.corpus_schema import MIGRATIONS
+    db = tmp_path / "old.db"
+    conn = sqlite3.connect(db)
+    conn.executescript(MIGRATIONS[0])
+    conn.execute("PRAGMA user_version = 1")
+    conn.commit()
+    conn.close()
+    with pytest.raises(SystemExit, match="schema"):
+        main(["--db", str(db), "--read-only", "corpus", "stats"])

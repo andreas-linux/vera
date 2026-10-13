@@ -40,6 +40,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -78,6 +79,8 @@ def _open_service(args) -> EVerificationService:
     if path:
         if not Path(path).exists():
             raise SystemExit(f"vera: no corpus at {path}; create one with `vera --db {path} corpus init`")
+        if args.read_only:
+            return EVerificationService(path, read_only=True)
         return EVerificationService(path, seed=args.with_demo)
     print(DEMO_NOTE, file=sys.stderr)
     return EVerificationService(":memory:", seed=True)
@@ -97,7 +100,10 @@ def cmd_check(args) -> int:
         raise SystemExit(f"vera: no corpus at {path}; create one with `vera --db {path} corpus init`")
     if not path:
         print(DEMO_NOTE, file=sys.stderr)
-    pipeline = VERAPipeline(db_path=path or ":memory:", seed=(not path) or args.with_demo)
+    if args.read_only and not path:
+        raise SystemExit("vera: --read-only needs a corpus file (--db or VERA_DB)")
+    pipeline = VERAPipeline(db_path=path or ":memory:", seed=(not path) or args.with_demo,
+                            read_only=args.read_only)
     try:
         text = " ".join(args.statement)
         r = pipeline.run(text)
@@ -359,6 +365,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="also load the demonstration entities into the corpus file")
     common.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
                         help="machine-readable output")
+    common.add_argument("--read-only", action="store_true", default=argparse.SUPPRESS,
+                        help="open the corpus without writing (no audit log); for a file on "
+                             "a share or mount that cannot take SQLite writes")
 
     p = argparse.ArgumentParser(
         prog="vera", parents=[common],
@@ -456,10 +465,21 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
-    for name, default in (("db", None), ("with_demo", False), ("json", False)):
+    for name, default in (("db", None), ("with_demo", False), ("json", False),
+                          ("read_only", False)):
         if not hasattr(args, name):
             setattr(args, name, default)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except sqlite3.Error as exc:
+        # A corpus that cannot be read or written is "not evaluated", never a verdict.
+        print(f"vera: corpus error: {exc}. If the file sits on a share or mount that "
+              f"cannot take SQLite writes, retry with --read-only.", file=sys.stderr)
+        return EXIT_NOT_EVALUATED
+    except ValueError as exc:
+        if getattr(args, "read_only", False):
+            raise SystemExit(f"vera: {exc}")
+        raise
 
 
 if __name__ == "__main__":

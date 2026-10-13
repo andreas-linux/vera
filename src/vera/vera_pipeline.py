@@ -220,10 +220,11 @@ class VERAPipeline:
         response.print_audit_trail()
     """
 
-    def __init__(self, db_path: str = ":memory:", seed: bool = True):
+    def __init__(self, db_path: str = ":memory:", seed: bool = True, read_only: bool = False):
         self.parser = FormulaParser()
         self.krampitz = KrampitzAnalyzer()
-        self.e_service = EVerificationService(db_path=db_path, seed=seed)
+        self.e_service = EVerificationService(db_path=db_path, seed=seed and not read_only,
+                                              read_only=read_only)
         self.d_service = DServiceStub()
 
     def run(self, query: str) -> VerifiedResponse:

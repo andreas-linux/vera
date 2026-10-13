@@ -35,7 +35,7 @@ from typing import Optional, List, Dict, Any
 from pathlib import Path
 from datetime import datetime, timezone
 
-from .corpus_schema import SCHEMA_VERSION, migrate
+from .corpus_schema import SCHEMA_VERSION, current_version, migrate
 
 
 # =============================================================================
@@ -378,7 +378,7 @@ class EVerificationService:
         print(result.existence_status)  # ExistenceStatus.EXISTS
     """
 
-    def __init__(self, db_path: str = ":memory:", seed: bool = True):
+    def __init__(self, db_path: str = ":memory:", seed: bool = True, read_only: bool = False):
         """
         Open (or create) an E! Corpus.
 
@@ -388,8 +388,28 @@ class EVerificationService:
                      Sherlock Holmes and the rest). Leave on for demos and tests;
                      turn off for a corpus of your own, or the demo rows mix in
                      with your evidence.
+            read_only: Open an existing corpus file without writing to it:
+                     no migration, no seed, and lookups are not written to
+                     the audit log. For a file on a share or mount that cannot
+                     take SQLite writes. The file must already be at the
+                     current schema version.
         """
         self.db_path = db_path
+        self.read_only = read_only
+        if read_only:
+            if db_path == ":memory:":
+                raise ValueError("read_only needs a corpus file")
+            uri = Path(db_path).resolve().as_uri() + "?mode=ro"
+            self._conn = sqlite3.connect(uri, uri=True, check_same_thread=False)
+            self._conn.row_factory = sqlite3.Row
+            version = current_version(self._conn)
+            if version != SCHEMA_VERSION:
+                self._conn.close()
+                raise ValueError(
+                    f"read-only open needs schema v{SCHEMA_VERSION}; {db_path} is "
+                    f"v{version}. Open it once writable to migrate it.")
+            self.migrations_applied: List[int] = []
+            return
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self.migrations_applied = migrate(self._conn)
@@ -872,6 +892,8 @@ class EVerificationService:
 
     def _audit(self, normalised_name: str, result: ExistenceResult,
                pipeline_run_id: Optional[str]) -> None:
+        if self.read_only:
+            return
         self._conn.execute(
             """INSERT INTO audit_log
                (log_id, query_name, normalised_name, result_status, confidence,

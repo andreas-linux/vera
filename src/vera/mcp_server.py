@@ -50,12 +50,13 @@ INSTRUCTIONS = (
 class VeraTools:
     """The tool logic, independent of any MCP library, so it can be tested directly."""
 
-    def __init__(self, db_path: Optional[str] = None):
+    def __init__(self, db_path: Optional[str] = None, read_only: bool = False):
         if db_path and not Path(db_path).exists():
             raise FileNotFoundError(f"no corpus at {db_path}; create one with "
                                     f"`vera --db {db_path} corpus init`")
         self.corpus = db_path or "demo"
-        self.pipeline = VERAPipeline(db_path=db_path or ":memory:", seed=not db_path)
+        self.pipeline = VERAPipeline(db_path=db_path or ":memory:", seed=not db_path,
+                                     read_only=read_only and bool(db_path))
         self.svc = self.pipeline.e_service
 
     def _tag(self, d: Dict[str, Any]) -> Dict[str, Any]:
@@ -140,11 +141,13 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="vera-mcp", description="V.E.R.A. MCP server (stdio)")
     p.add_argument("--db", default=os.environ.get("VERA_DB"),
                    help="corpus file (default: $VERA_DB, else the demo corpus)")
+    p.add_argument("--read-only", action="store_true",
+                   help="do not write to the corpus (no audit log)")
     p.add_argument("--version", action="version", version=f"vera-mcp {__version__}")
     args = p.parse_args(argv)
     try:
-        tools = VeraTools(args.db)
-    except FileNotFoundError as exc:
+        tools = VeraTools(args.db, read_only=args.read_only)
+    except (FileNotFoundError, ValueError) as exc:
         print(f"vera-mcp: {exc}", file=sys.stderr)
         return 2
     if tools.corpus == "demo":
