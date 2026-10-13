@@ -34,7 +34,17 @@ from .krampitz_analyzer import (
     Universal,
     Existential,
 )
-from .e_verification_service import EVerificationService, ExistenceStatus, ExistenceResult
+from .e_verification_service import (
+    EVerificationService,
+    EntityType,
+    ExistenceResult,
+    ExistenceStatus,
+    IdentityRelationType,
+    IdentityResult,
+    Provenance,
+    ProvenanceKind,
+)
+from .corpus_schema import SCHEMA_VERSION
 from .vera_pipeline import VERAPipeline, VerificationOutcome, VerifiedResponse
 
 __all__ = [
@@ -52,8 +62,14 @@ __all__ = [
     "Universal",
     "Existential",
     "EVerificationService",
+    "EntityType",
     "ExistenceStatus",
     "ExistenceResult",
+    "IdentityRelationType",
+    "IdentityResult",
+    "Provenance",
+    "ProvenanceKind",
+    "SCHEMA_VERSION",
     "VERAPipeline",
     "VerificationOutcome",
     "VerifiedResponse",

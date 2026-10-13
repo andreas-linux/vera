@@ -22,8 +22,8 @@ Source: Wessel, H. (1992). 'Existenz, Ununterscheidbarkeit, Identitaet.'
         Reihe Geistes- und Sozialwiss. 41, pp. 30-39
 
 Author: V.E.R.A. Open Source Initiative
-Version: 0.1.0 (Prototype -- SQLite seed corpus)
-Date: March 2026
+Version: 0.2.0 (unified E! Corpus schema, see corpus_schema.py)
+Date: October 2026
 """
 
 import sqlite3
@@ -33,7 +33,9 @@ from dataclasses import dataclass, field, asdict
 from enum import Enum
 from typing import Optional, List, Dict, Any
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
+
+from .corpus_schema import SCHEMA_VERSION, migrate
 
 
 # =============================================================================
@@ -58,16 +60,53 @@ class EntityType(Enum):
     THING = "THING"               # General physical objects
     EVENT = "EVENT"
     FICTIONAL = "FICTIONAL"       # Known non-existent (fictional entities)
+    MYTHOLOGICAL = "MYTHOLOGICAL" # Known non-existent (mythological entities)
+
+
+class ProvenanceKind(Enum):
+    """
+    Whether a source can be re-read, or is only identified by name.
+
+    RESOLVABLE: carries a URL (or other locator) that can be fetched again.
+    NAMED: identified by name only, e.g. "DPMC consultation, Feb 2026".
+           Evidence that a source was cited, not that anyone can re-read it.
+    """
+    RESOLVABLE = "resolvable"
+    NAMED = "named"
+
+
+class IdentityRelationType(Enum):
+    """
+    NTP identity relations (Wessel 1992, D1 to D4).
+    """
+    SAME_AS = "SAME_AS"                            # x = y
+    DIFFERENT = "DIFFERENT"                        # x ≠ y (D3)
+    WEAK_INDISCERNIBLE = "WEAK_INDISCERNIBLE"      # ~(x#y) (D2)
+    STRONG_INDISCERNIBLE = "STRONG_INDISCERNIBLE"  # ~(x ≠ y) (D4)
+    UNKNOWN = "UNKNOWN"
+
+
+NTP_SYMBOLS = {
+    IdentityRelationType.SAME_AS: "x = y",
+    IdentityRelationType.DIFFERENT: "x ≠ y",
+    IdentityRelationType.WEAK_INDISCERNIBLE: "~(x#y)",
+    IdentityRelationType.STRONG_INDISCERNIBLE: "~(x ≠ y)",
+    IdentityRelationType.UNKNOWN: "?",
+}
 
 
 @dataclass
 class Provenance:
     """Evidence record for an existence claim."""
     source_type: str              # e.g. WIKIPEDIA, WIKIDATA, WHO, NZ_FORMULARY
-    source_url: str
+    source_url: Optional[str]     # None for a NAMED source
     reliability_score: float      # 0.0 to 1.0
     retrieved_date: str           # ISO date string
     notes: Optional[str] = None
+    provenance_kind: str = ProvenanceKind.RESOLVABLE.value
+    source_title: Optional[str] = None
+    source_date: Optional[str] = None
+    back_reference: Optional[str] = None   # where the source was found; never evidence
 
 
 @dataclass
@@ -107,68 +146,32 @@ class ExistenceResult:
         return json.dumps(self.to_dict(), indent=indent)
 
 
-# =============================================================================
-# Database Schema
-# =============================================================================
+@dataclass
+class IdentityResult:
+    """Result of an identity resolution between two names."""
+    entity_a: str
+    entity_b: str
+    relation_type: IdentityRelationType
+    ntp_relation: str
+    confidence: float
+    both_exist: bool
+    entity_a_id: Optional[str]
+    entity_b_id: Optional[str]
 
-SCHEMA_SQL = """
--- E! Corpus: entities table
--- Every row represents one verified (or verified-not-to-exist) entity.
-CREATE TABLE IF NOT EXISTS entities (
-    entity_id       TEXT PRIMARY KEY,
-    canonical_name  TEXT NOT NULL,
-    entity_type     TEXT NOT NULL,
-    status          TEXT NOT NULL,          -- EXISTS | NOT_EXISTS
-    confidence      REAL NOT NULL DEFAULT 1.0,
-    created_at      TEXT NOT NULL,
-    notes           TEXT
-);
+    def to_dict(self) -> dict:
+        return {
+            "entity_a": self.entity_a,
+            "entity_b": self.entity_b,
+            "relation_type": self.relation_type.value,
+            "ntp_relation": self.ntp_relation,
+            "confidence": self.confidence,
+            "both_exist": self.both_exist,
+            "entity_a_id": self.entity_a_id,
+            "entity_b_id": self.entity_b_id,
+        }
 
--- Aliases: alternative names that resolve to a canonical entity
-CREATE TABLE IF NOT EXISTS aliases (
-    alias_id        TEXT PRIMARY KEY,
-    entity_id       TEXT NOT NULL REFERENCES entities(entity_id),
-    alias_name      TEXT NOT NULL,
-    alias_type      TEXT,                   -- e.g. ABBREVIATION, TRADE_NAME, SYNONYM
-    UNIQUE(alias_name COLLATE NOCASE)
-);
 
--- Provenance: one or more evidence records per entity
-CREATE TABLE IF NOT EXISTS provenance (
-    provenance_id   TEXT PRIMARY KEY,
-    entity_id       TEXT NOT NULL REFERENCES entities(entity_id),
-    source_type     TEXT NOT NULL,
-    source_url      TEXT NOT NULL,
-    reliability_score REAL NOT NULL DEFAULT 0.9,
-    retrieved_date  TEXT NOT NULL,
-    notes           TEXT
-);
-
--- Properties: verifiable facts about existing entities
-CREATE TABLE IF NOT EXISTS properties (
-    property_id     TEXT PRIMARY KEY,
-    entity_id       TEXT NOT NULL REFERENCES entities(entity_id),
-    property_name   TEXT NOT NULL,
-    property_value  TEXT NOT NULL,
-    confidence      REAL NOT NULL DEFAULT 0.9,
-    provenance_id   TEXT REFERENCES provenance(provenance_id)
-);
-
--- Audit log: every existence check is recorded
-CREATE TABLE IF NOT EXISTS audit_log (
-    log_id          TEXT PRIMARY KEY,
-    query_name      TEXT NOT NULL,
-    normalised_name TEXT NOT NULL,
-    result_status   TEXT NOT NULL,
-    confidence      REAL,
-    timestamp       TEXT NOT NULL,
-    pipeline_run_id TEXT
-);
-
--- Canonical name index
-CREATE INDEX IF NOT EXISTS idx_entities_canonical ON entities(canonical_name COLLATE NOCASE);
-CREATE INDEX IF NOT EXISTS idx_aliases_name ON aliases(alias_name COLLATE NOCASE);
-"""
+# The schema lives in corpus_schema.py (MIGRATIONS). One definition, versioned.
 
 
 # =============================================================================
@@ -368,82 +371,109 @@ class EVerificationService:
     still referring to a non-existent entity. This service is the gatekeeper.
 
     Usage:
-        service = EVerificationService()
+        service = EVerificationService()                     # in-memory, demo seed
+        service = EVerificationService("corpus.db", seed=False)  # your own corpus
         result = service.check_existence("Aspirin")
         print(result.existence_status)  # ExistenceStatus.EXISTS
     """
 
-    def __init__(self, db_path: str = ":memory:"):
+    def __init__(self, db_path: str = ":memory:", seed: bool = True):
         """
-        Initialise the service with a SQLite database.
+        Open (or create) an E! Corpus.
 
         Args:
-            db_path: Path to SQLite file, or ':memory:' for in-memory (testing).
+            db_path: Path to a SQLite file, or ':memory:' for an in-memory corpus.
+            seed:    Load the v0.1 demonstration entities (Socrates, Aspirin,
+                     Sherlock Holmes and the rest). Leave on for demos and tests;
+                     turn off for a corpus of your own, or the demo rows mix in
+                     with your evidence.
         """
         self.db_path = db_path
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        self.migrations_applied = migrate(self._conn)
         self._conn.execute("PRAGMA foreign_keys = ON")
-        self._initialise_schema()
-        self._load_seed_data()
+        if seed:
+            self._load_seed_data()
 
-    def _initialise_schema(self) -> None:
-        """Create tables if they do not exist."""
-        self._conn.executescript(SCHEMA_SQL)
-        self._conn.commit()
+    # -------------------------------------------------------------------------
+    # Internal writers (named columns, so schema growth cannot shift values)
+    # -------------------------------------------------------------------------
+
+    @staticmethod
+    def _now() -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    def _insert_entity(self, cur, entity_id, canonical_name, entity_type, status,
+                       confidence, notes=None, description=None, wikidata_qid=None):
+        now = self._now()
+        cur.execute(
+            """INSERT INTO entities
+               (entity_id, canonical_name, entity_type, status, confidence,
+                created_at, updated_at, notes, description, wikidata_qid)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (entity_id, canonical_name, entity_type, status, confidence,
+             now, now, notes, description, wikidata_qid),
+        )
+
+    def _insert_alias(self, cur, entity_id, alias_name, alias_type):
+        cur.execute(
+            """INSERT OR IGNORE INTO aliases (alias_id, entity_id, alias_name, alias_type)
+               VALUES (?, ?, ?, ?)""",
+            (str(uuid.uuid4()), entity_id, alias_name, alias_type),
+        )
+
+    def _insert_provenance(self, cur, entity_id, source_type, source_url, reliability,
+                           kind=ProvenanceKind.RESOLVABLE.value, source_title=None,
+                           source_date=None, back_reference=None,
+                           verification_method="AUTOMATED", evidence_snippet=None,
+                           notes=None) -> str:
+        prov_id = str(uuid.uuid4())
+        cur.execute(
+            """INSERT INTO provenance
+               (provenance_id, entity_id, source_type, source_url, source_title,
+                source_date, reliability_score, retrieved_date, verification_method,
+                provenance_kind, evidence_snippet, back_reference, notes)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (prov_id, entity_id, source_type, source_url, source_title, source_date,
+             reliability, self._now(), verification_method, kind, evidence_snippet,
+             back_reference, notes),
+        )
+        return prov_id
+
+    def _insert_property(self, cur, entity_id, name, value, confidence, prov_id) -> str:
+        prop_id = str(uuid.uuid4())
+        cur.execute(
+            """INSERT INTO properties
+               (property_id, entity_id, property_name, property_value, confidence, provenance_id)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (prop_id, entity_id, name, value, confidence, prov_id),
+        )
+        return prop_id
 
     def _load_seed_data(self) -> None:
         """Populate corpus with v0.1 seed entities, skipping existing records."""
         cur = self._conn.cursor()
-        now = datetime.utcnow().isoformat()
-
         for entity in SEED_DATA:
-            # Skip if already loaded (idempotent)
             cur.execute("SELECT 1 FROM entities WHERE entity_id = ?", (entity["entity_id"],))
             if cur.fetchone():
                 continue
-
-            cur.execute(
-                "INSERT INTO entities VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (
-                    entity["entity_id"],
-                    entity["canonical_name"],
-                    entity["entity_type"].value,
-                    entity["status"].value,
-                    entity["confidence"],
-                    now,
-                    entity.get("notes"),
-                )
+            self._insert_entity(
+                cur, entity["entity_id"], entity["canonical_name"],
+                entity["entity_type"].value, entity["status"].value,
+                entity["confidence"], notes=entity.get("notes"),
             )
-
-            # Insert canonical name as its own alias for uniform lookup
-            cur.execute(
-                "INSERT OR IGNORE INTO aliases VALUES (?, ?, ?, ?)",
-                (str(uuid.uuid4()), entity["entity_id"], entity["canonical_name"], "CANONICAL")
-            )
-
-            # Insert aliases
+            self._insert_alias(cur, entity["entity_id"], entity["canonical_name"], "CANONICAL")
             for alias_name, alias_type in entity.get("aliases", []):
-                cur.execute(
-                    "INSERT OR IGNORE INTO aliases VALUES (?, ?, ?, ?)",
-                    (str(uuid.uuid4()), entity["entity_id"], alias_name, alias_type)
-                )
-
-            # Insert provenance
+                self._insert_alias(cur, entity["entity_id"], alias_name, alias_type)
             source_type, source_url, reliability = entity["provenance"]
-            prov_id = str(uuid.uuid4())
-            cur.execute(
-                "INSERT INTO provenance VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (prov_id, entity["entity_id"], source_type, source_url, reliability, now, None)
+            prov_id = self._insert_provenance(
+                cur, entity["entity_id"], source_type, source_url, reliability
             )
-
-            # Insert properties
             for prop_name, prop_value in entity.get("properties", []):
-                cur.execute(
-                    "INSERT INTO properties VALUES (?, ?, ?, ?, ?, ?)",
-                    (str(uuid.uuid4()), entity["entity_id"], prop_name, prop_value, entity["confidence"], prov_id)
+                self._insert_property(
+                    cur, entity["entity_id"], prop_name, prop_value, entity["confidence"], prov_id
                 )
-
         self._conn.commit()
 
     # -------------------------------------------------------------------------
@@ -464,7 +494,7 @@ class EVerificationService:
 
         Args:
             entity_name: Name or alias to look up.
-            fuzzy: Enable fuzzy (partial) matching (not yet implemented in v0.1).
+            fuzzy: Enable fuzzy (partial) matching (not yet implemented).
             include_aliases: Search alias table as well as canonical names.
             pipeline_run_id: Trace ID from the calling pipeline run.
 
@@ -477,21 +507,14 @@ class EVerificationService:
         if entity_row:
             prov_row = self._get_provenance(entity_row["entity_id"])
             props = self._get_properties(entity_row["entity_id"])
-            status = ExistenceStatus(entity_row["status"])
             result = ExistenceResult(
                 entity_name=entity_name,
-                existence_status=status,
+                existence_status=ExistenceStatus(entity_row["status"]),
                 confidence=entity_row["confidence"],
                 entity_id=entity_row["entity_id"],
                 canonical_name=entity_row["canonical_name"],
                 entity_type=EntityType(entity_row["entity_type"]),
-                provenance=Provenance(
-                    source_type=prov_row["source_type"],
-                    source_url=prov_row["source_url"],
-                    reliability_score=prov_row["reliability_score"],
-                    retrieved_date=prov_row["retrieved_date"],
-                    notes=prov_row["notes"],
-                ) if prov_row else None,
+                provenance=self._provenance_from_row(prov_row) if prov_row else None,
                 properties=props,
             )
         else:
@@ -506,23 +529,105 @@ class EVerificationService:
         self._audit(normalised, result, pipeline_run_id)
         return result
 
+    def resolve_identity(self, entity_a: str, entity_b: str) -> IdentityResult:
+        """
+        Determine the identity relation between two names (Wessel 1992, D1 to D4).
+
+        Order of evidence:
+          1. Both names resolve to the same corpus entity: x = y.
+          2. A stored identity relation between the two entities.
+          3. Two distinct corpus entities that both EXIST: x ≠ y, at reduced
+             confidence, because it is inferred from distinct records rather
+             than from a recorded distinguishing property.
+          4. Otherwise UNKNOWN.
+
+        Lookups here are not written to the audit log; only check_existence is.
+        """
+        row_a = self._find_entity(entity_a.strip(), True)
+        row_b = self._find_entity(entity_b.strip(), True)
+        id_a = row_a["entity_id"] if row_a else None
+        id_b = row_b["entity_id"] if row_b else None
+        both_exist = bool(
+            row_a and row_b
+            and row_a["status"] == ExistenceStatus.EXISTS.value
+            and row_b["status"] == ExistenceStatus.EXISTS.value
+        )
+
+        def result(rel: IdentityRelationType, conf: float, symbol: Optional[str] = None):
+            return IdentityResult(
+                entity_a=entity_a, entity_b=entity_b, relation_type=rel,
+                ntp_relation=symbol or NTP_SYMBOLS[rel], confidence=conf,
+                both_exist=both_exist, entity_a_id=id_a, entity_b_id=id_b,
+            )
+
+        if id_a and id_b:
+            conf = min(row_a["confidence"], row_b["confidence"])
+            if id_a == id_b:
+                return result(IdentityRelationType.SAME_AS, conf)
+            stored = self._conn.execute(
+                """SELECT relation_type, ntp_symbol, confidence FROM identity_relations
+                   WHERE (entity_a_id = ? AND entity_b_id = ?)
+                      OR (entity_a_id = ? AND entity_b_id = ?)
+                   ORDER BY confidence DESC LIMIT 1""",
+                (id_a, id_b, id_b, id_a),
+            ).fetchone()
+            if stored:
+                return result(IdentityRelationType(stored["relation_type"]),
+                              stored["confidence"], stored["ntp_symbol"])
+            if both_exist:
+                return result(IdentityRelationType.DIFFERENT, conf * 0.9)
+        return result(IdentityRelationType.UNKNOWN, 0.0)
+
+    def search_entities(
+        self,
+        query: str,
+        limit: int = 10,
+        entity_type: Optional[EntityType] = None,
+        existence_status: Optional[ExistenceStatus] = None,
+    ) -> List[ExistenceResult]:
+        """Substring search over canonical names and aliases. Not audited."""
+        like = f"%{query.strip().lower()}%"
+        sql = """SELECT DISTINCT e.* FROM entities e
+                 LEFT JOIN aliases a ON e.entity_id = a.entity_id
+                 WHERE (LOWER(e.canonical_name) LIKE ? OR LOWER(a.alias_name) LIKE ?)"""
+        params: List[Any] = [like, like]
+        if entity_type:
+            sql += " AND e.entity_type = ?"
+            params.append(entity_type.value)
+        if existence_status:
+            sql += " AND e.status = ?"
+            params.append(existence_status.value)
+        sql += " ORDER BY e.confidence DESC, e.canonical_name LIMIT ?"
+        params.append(limit)
+        out = []
+        for row in self._conn.execute(sql, params).fetchall():
+            prov = self._get_provenance(row["entity_id"])
+            out.append(ExistenceResult(
+                entity_name=row["canonical_name"],
+                existence_status=ExistenceStatus(row["status"]),
+                confidence=row["confidence"],
+                entity_id=row["entity_id"],
+                canonical_name=row["canonical_name"],
+                entity_type=EntityType(row["entity_type"]),
+                provenance=self._provenance_from_row(prov) if prov else None,
+            ))
+        return out
+
     def get_corpus_stats(self) -> Dict[str, Any]:
         """Return summary statistics for the E! Corpus."""
-        cur = self._conn.cursor()
-        stats = {}
-        cur.execute("SELECT COUNT(*) FROM entities WHERE status = 'EXISTS'")
-        stats["existing_entities"] = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM entities WHERE status = 'NOT_EXISTS'")
-        stats["confirmed_nonexistent"] = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM aliases")
-        stats["alias_records"] = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM properties")
-        stats["property_records"] = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM provenance")
-        stats["provenance_records"] = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM audit_log")
-        stats["queries_logged"] = cur.fetchone()[0]
-        return stats
+        q = lambda sql: self._conn.execute(sql).fetchone()[0]  # noqa: E731
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "existing_entities": q("SELECT COUNT(*) FROM entities WHERE status = 'EXISTS'"),
+            "confirmed_nonexistent": q("SELECT COUNT(*) FROM entities WHERE status = 'NOT_EXISTS'"),
+            "alias_records": q("SELECT COUNT(*) FROM aliases"),
+            "property_records": q("SELECT COUNT(*) FROM properties"),
+            "provenance_records": q("SELECT COUNT(*) FROM provenance"),
+            "provenance_resolvable": q("SELECT COUNT(*) FROM provenance WHERE provenance_kind = 'resolvable'"),
+            "provenance_named": q("SELECT COUNT(*) FROM provenance WHERE provenance_kind = 'named'"),
+            "identity_relations": q("SELECT COUNT(*) FROM identity_relations"),
+            "queries_logged": q("SELECT COUNT(*) FROM audit_log"),
+        }
 
     def add_entity(
         self,
@@ -530,48 +635,89 @@ class EVerificationService:
         entity_type: EntityType,
         status: ExistenceStatus,
         source_type: str,
-        source_url: str,
+        source_url: Optional[str] = None,
         reliability_score: float = 0.85,
         aliases: Optional[List[tuple]] = None,
         properties: Optional[List[tuple]] = None,
         confidence: float = 0.9,
         notes: Optional[str] = None,
+        *,
+        provenance_kind: ProvenanceKind = ProvenanceKind.RESOLVABLE,
+        source_title: Optional[str] = None,
+        source_date: Optional[str] = None,
+        back_reference: Optional[str] = None,
+        description: Optional[str] = None,
+        wikidata_qid: Optional[str] = None,
+        verification_method: str = "MANUAL",
     ) -> str:
         """
-        Add a new entity to the E! Corpus programmatically.
-        Used for corpus expansion (Pharma 500 build, contributor submissions).
+        Add a new entity to the E! Corpus, with the evidence for it.
+
+        A RESOLVABLE source needs ``source_url``. A NAMED source needs
+        ``source_title`` (what the source is called) and may omit the URL.
+        ``back_reference`` records where the source was found and is never
+        treated as evidence.
 
         Returns the new entity_id.
         """
-        entity_id = f"ent-{str(uuid.uuid4())[:8]}"
-        now = datetime.utcnow().isoformat()
-        cur = self._conn.cursor()
+        kind = ProvenanceKind(provenance_kind)
+        if not canonical_name or not canonical_name.strip():
+            raise ValueError("canonical_name is required")
+        if kind is ProvenanceKind.RESOLVABLE and not (source_url or "").strip():
+            raise ValueError("a resolvable source needs source_url; "
+                             "use provenance_kind=NAMED with source_title otherwise")
+        if kind is ProvenanceKind.NAMED and not (source_title or "").strip():
+            raise ValueError("a named source needs source_title")
+        if self._find_entity(canonical_name.strip(), True):
+            raise ValueError(f"'{canonical_name}' is already in the corpus (by name or alias)")
 
-        cur.execute(
-            "INSERT INTO entities VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (entity_id, canonical_name, entity_type.value, status.value, confidence, now, notes)
-        )
-        cur.execute(
-            "INSERT OR IGNORE INTO aliases VALUES (?, ?, ?, ?)",
-            (str(uuid.uuid4()), entity_id, canonical_name, "CANONICAL")
-        )
-        for alias_name, alias_type in (aliases or []):
-            cur.execute(
-                "INSERT OR IGNORE INTO aliases VALUES (?, ?, ?, ?)",
-                (str(uuid.uuid4()), entity_id, alias_name, alias_type)
+        entity_id = f"ent-{uuid.uuid4().hex[:12]}"
+        cur = self._conn.cursor()
+        try:
+            self._insert_entity(cur, entity_id, canonical_name.strip(), entity_type.value,
+                                status.value, confidence, notes=notes,
+                                description=description, wikidata_qid=wikidata_qid)
+            self._insert_alias(cur, entity_id, canonical_name.strip(), "CANONICAL")
+            for alias_name, alias_type in (aliases or []):
+                self._insert_alias(cur, entity_id, alias_name, alias_type)
+            prov_id = self._insert_provenance(
+                cur, entity_id, source_type, (source_url or None), reliability_score,
+                kind=kind.value, source_title=source_title, source_date=source_date,
+                back_reference=back_reference, verification_method=verification_method,
             )
-        prov_id = str(uuid.uuid4())
-        cur.execute(
-            "INSERT INTO provenance VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (prov_id, entity_id, source_type, source_url, reliability_score, now, None)
-        )
-        for prop_name, prop_value in (properties or []):
-            cur.execute(
-                "INSERT INTO properties VALUES (?, ?, ?, ?, ?, ?)",
-                (str(uuid.uuid4()), entity_id, prop_name, prop_value, confidence, prov_id)
-            )
-        self._conn.commit()
+            for prop_name, prop_value in (properties or []):
+                self._insert_property(cur, entity_id, prop_name, prop_value, confidence, prov_id)
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
         return entity_id
+
+    def add_property(self, entity_id: str, property_name: str, property_value: str,
+                     confidence: float = 0.5, provenance_id: Optional[str] = None) -> str:
+        """Attach a property (a predicate) to an existing entity."""
+        cur = self._conn.cursor()
+        prop_id = self._insert_property(cur, entity_id, property_name, property_value,
+                                        confidence, provenance_id)
+        self._conn.commit()
+        return prop_id
+
+    def add_identity_relation(self, entity_a_id: str, entity_b_id: str,
+                              relation_type: IdentityRelationType,
+                              confidence: float = 0.5,
+                              provenance_id: Optional[str] = None) -> str:
+        """Record an identity relation (D1 to D4) between two corpus entities."""
+        relation_id = f"rel-{uuid.uuid4().hex[:12]}"
+        self._conn.execute(
+            """INSERT INTO identity_relations
+               (relation_id, entity_a_id, entity_b_id, relation_type, ntp_symbol,
+                confidence, provenance_id, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (relation_id, entity_a_id, entity_b_id, relation_type.value,
+             NTP_SYMBOLS[relation_type], confidence, provenance_id, self._now()),
+        )
+        self._conn.commit()
+        return relation_id
 
     # -------------------------------------------------------------------------
     # Private Helpers
@@ -579,53 +725,60 @@ class EVerificationService:
 
     def _find_entity(self, name: str, include_aliases: bool) -> Optional[sqlite3.Row]:
         cur = self._conn.cursor()
-        # Direct canonical match
-        cur.execute(
-            "SELECT * FROM entities WHERE canonical_name = ? COLLATE NOCASE", (name,)
-        )
+        cur.execute("SELECT * FROM entities WHERE canonical_name = ? COLLATE NOCASE", (name,))
         row = cur.fetchone()
         if row:
             return row
         if include_aliases:
             cur.execute(
-                """
-                SELECT e.* FROM entities e
-                JOIN aliases a ON e.entity_id = a.entity_id
-                WHERE a.alias_name = ? COLLATE NOCASE
-                """,
-                (name,)
+                """SELECT e.* FROM entities e
+                   JOIN aliases a ON e.entity_id = a.entity_id
+                   WHERE a.alias_name = ? COLLATE NOCASE""",
+                (name,),
             )
             return cur.fetchone()
         return None
 
     def _get_provenance(self, entity_id: str) -> Optional[sqlite3.Row]:
-        cur = self._conn.cursor()
-        cur.execute(
-            "SELECT * FROM provenance WHERE entity_id = ? ORDER BY reliability_score DESC LIMIT 1",
-            (entity_id,)
+        # A resolvable source outranks a named one at equal reliability.
+        return self._conn.execute(
+            """SELECT * FROM provenance WHERE entity_id = ?
+               ORDER BY reliability_score DESC,
+                        CASE provenance_kind WHEN 'resolvable' THEN 0 ELSE 1 END
+               LIMIT 1""",
+            (entity_id,),
+        ).fetchone()
+
+    @staticmethod
+    def _provenance_from_row(row: sqlite3.Row) -> Provenance:
+        return Provenance(
+            source_type=row["source_type"],
+            source_url=row["source_url"],
+            reliability_score=row["reliability_score"],
+            retrieved_date=row["retrieved_date"],
+            notes=row["notes"],
+            provenance_kind=row["provenance_kind"],
+            source_title=row["source_title"],
+            source_date=row["source_date"],
+            back_reference=row["back_reference"],
         )
-        return cur.fetchone()
 
     def _get_properties(self, entity_id: str) -> List[Dict[str, Any]]:
-        cur = self._conn.cursor()
-        cur.execute(
+        cur = self._conn.execute(
             "SELECT property_name, property_value, confidence FROM properties WHERE entity_id = ?",
-            (entity_id,)
+            (entity_id,),
         )
         return [dict(row) for row in cur.fetchall()]
 
-    def _audit(self, normalised_name: str, result: ExistenceResult, pipeline_run_id: Optional[str]) -> None:
+    def _audit(self, normalised_name: str, result: ExistenceResult,
+               pipeline_run_id: Optional[str]) -> None:
         self._conn.execute(
-            "INSERT INTO audit_log VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                str(uuid.uuid4()),
-                result.entity_name,
-                normalised_name,
-                result.existence_status.value,
-                result.confidence,
-                datetime.utcnow().isoformat(),
-                pipeline_run_id,
-            )
+            """INSERT INTO audit_log
+               (log_id, query_name, normalised_name, result_status, confidence,
+                timestamp, pipeline_run_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (str(uuid.uuid4()), result.entity_name, normalised_name,
+             result.existence_status.value, result.confidence, self._now(), pipeline_run_id),
         )
         self._conn.commit()
 
