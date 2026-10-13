@@ -246,7 +246,7 @@ def import_citations(svc: EVerificationService, paths: Iterable[Path],
                 if refusal.reason == "no URL":
                     t = _QUOTED_TITLE.match(_NUMBERED.match(text).group(2))
                     if t and svc.add_candidate(
-                            t.group("title").strip(" ."), ORIGIN_NO_URL,
+                            (t.group("title") or t.group("ititle")).strip(" ."), ORIGIN_NO_URL,
                             type_hint=EntityType.DOCUMENT.value,
                             back_reference=f"{label(path)} [{_NUMBERED.match(text).group(1)}]",
                             raw=text.strip()):

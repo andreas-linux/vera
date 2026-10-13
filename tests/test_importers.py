@@ -208,3 +208,11 @@ def test_multi_publisher_string_creates_no_publisher(svc, tmp_path):
     assert svc.find_entity_id("CISA, NSA, and NCSC-UK") is None
     assert svc.find_entity_id("Joint guidance")          # the document still stands
     assert svc.find_entity_id("Smith, J")                # one comma names one author
+
+
+def test_italic_title_without_url_becomes_candidate(svc, tmp_path):
+    p = tmp_path / "a.md"
+    p.write_text("[4] Ministry of Justice. *Privacy Act review*. 2026.\n", encoding="utf-8")
+    rep = import_citations(svc, [p])
+    assert rep.refused_by_reason() == {"no URL": 1}
+    assert [c["name"] for c in svc.list_candidates(origin=ORIGIN_NO_URL)] == ["Privacy Act review"]
